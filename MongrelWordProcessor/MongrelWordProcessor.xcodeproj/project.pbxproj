@@ -1,0 +1,456 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0D7BF7893436D9F227282165 /* DocumentSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F66175B211F436D348DBBC /* DocumentSession.swift */; };
+		10A81EAD13E6BEB0CE558F8D /* MongrelWordProcessorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48C1ABAEF2F2E9CFB5E505B3 /* MongrelWordProcessorApp.swift */; };
+		17715AB8D6743910E99E9631 /* WordProcessorContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13F4C79F47394355F17C647 /* WordProcessorContentView.swift */; };
+		3CE7A3CDA701FDAF89F330F6 /* README.txt in Resources */ = {isa = PBXBuildFile; fileRef = 9E3836C034D7460D9FDC5755 /* README.txt */; };
+		72226E1EDFCC2BC0B1F5191E /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC1E2B431E92C543C298EDBA /* UniformTypeIdentifiers.framework */; };
+		854040129A4D155F581A1566 /* FormattingBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B7890093DB9A8A0D29CE6F /* FormattingBridge.swift */; };
+		AAB5FB7939344DB67E085C67 /* TextKit2EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDE05BC19CB789A9B2A75DF /* TextKit2EditorView.swift */; };
+		BD7B0D8773023F259981058C /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = DA3358EC92F3559BE6627E9C /* manifest.json */; };
+		D5697C50F9C6ABD7570650E3 /* SharedFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B2D62DE8E2BC72FF84BA1FEB /* SharedFoundation */; };
+		F41B7DA167516ECFD0F92E1F /* spellcheck_dictionary.txt in Resources */ = {isa = PBXBuildFile; fileRef = DCAB1A511A844BF112352251 /* spellcheck_dictionary.txt */; };
+		F502D8BCBB6E72F6C1FE4FEF /* MongrelDictionaryCompanionLexicon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		3B586887675402518D3AA9CC /* MongrelWordProcessor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MongrelWordProcessor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		48C1ABAEF2F2E9CFB5E505B3 /* MongrelWordProcessorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelWordProcessorApp.swift; sourceTree = "<group>"; };
+		73F4D21005E34B993817D1ED /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelDictionaryCompanionLexicon.swift; sourceTree = "<group>"; };
+		9E3836C034D7460D9FDC5755 /* README.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = README.txt; sourceTree = "<group>"; };
+		A4B7890093DB9A8A0D29CE6F /* FormattingBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormattingBridge.swift; sourceTree = "<group>"; };
+		C13F4C79F47394355F17C647 /* WordProcessorContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordProcessorContentView.swift; sourceTree = "<group>"; };
+		CC1E2B431E92C543C298EDBA /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		DA3358EC92F3559BE6627E9C /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = manifest.json; sourceTree = "<group>"; };
+		DCAB1A511A844BF112352251 /* spellcheck_dictionary.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = spellcheck_dictionary.txt; sourceTree = "<group>"; };
+		DEDE05BC19CB789A9B2A75DF /* TextKit2EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextKit2EditorView.swift; sourceTree = "<group>"; };
+		E0A77D6BABDCEAAE90E2D8A4 /* MongrelWordProcessor.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MongrelWordProcessor.entitlements; sourceTree = "<group>"; };
+		F6239312875A0A747367AC96 /* SharedFoundation */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SharedFoundation; path = "../../mongrel-notes/MongrelNotes/SharedFoundation"; sourceTree = SOURCE_ROOT; };
+		F6F66175B211F436D348DBBC /* DocumentSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSession.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A1A48D20F8A43279C72E33A0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D5697C50F9C6ABD7570650E3 /* SharedFoundation in Frameworks */,
+				72226E1EDFCC2BC0B1F5191E /* UniformTypeIdentifiers.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		17E27024E9CF31320986C364 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				C13F4C79F47394355F17C647 /* WordProcessorContentView.swift */,
+				E0CC215102CEB372E81AD945 /* Editor */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		1EF1F525A84569B0F4111C94 /* MongrelDictionaryCompanionPackage */ = {
+			isa = PBXGroup;
+			children = (
+				DA3358EC92F3559BE6627E9C /* manifest.json */,
+				9E3836C034D7460D9FDC5755 /* README.txt */,
+				DCAB1A511A844BF112352251 /* spellcheck_dictionary.txt */,
+			);
+			path = MongrelDictionaryCompanionPackage;
+			sourceTree = "<group>";
+		};
+		4A002D08F7780672D9346BD6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				CC1E2B431E92C543C298EDBA /* UniformTypeIdentifiers.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		694DE38A2AEA8E6049789621 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		72AA7D0BBC6AEBCCF7D3AE76 = {
+			isa = PBXGroup;
+			children = (
+				D88EC541AEBB81420AA95B35 /* App */,
+				957D22AF369699EBC69E728F /* Packages */,
+				4A002D08F7780672D9346BD6 /* Frameworks */,
+				A23A1747672D5C435627F37F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		957D22AF369699EBC69E728F /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				F6239312875A0A747367AC96 /* SharedFoundation */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		A23A1747672D5C435627F37F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				3B586887675402518D3AA9CC /* MongrelWordProcessor.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AE23287626170613D0F54667 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				F6F66175B211F436D348DBBC /* DocumentSession.swift */,
+				A4B7890093DB9A8A0D29CE6F /* FormattingBridge.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		D88EC541AEBB81420AA95B35 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				73F4D21005E34B993817D1ED /* Info.plist */,
+				E0A77D6BABDCEAAE90E2D8A4 /* MongrelWordProcessor.entitlements */,
+				48C1ABAEF2F2E9CFB5E505B3 /* MongrelWordProcessorApp.swift */,
+				F781B254304650A6341F81C8 /* Resources */,
+				694DE38A2AEA8E6049789621 /* Services */,
+				AE23287626170613D0F54667 /* ViewModels */,
+				17E27024E9CF31320986C364 /* Views */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E0CC215102CEB372E81AD945 /* Editor */ = {
+			isa = PBXGroup;
+			children = (
+				DEDE05BC19CB789A9B2A75DF /* TextKit2EditorView.swift */,
+			);
+			path = Editor;
+			sourceTree = "<group>";
+		};
+		F781B254304650A6341F81C8 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1EF1F525A84569B0F4111C94 /* MongrelDictionaryCompanionPackage */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C08F907B208FCDFB6185A8FE /* MongrelWordProcessor */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 362FE838997142024B215875 /* Build configuration list for PBXNativeTarget "MongrelWordProcessor" */;
+			buildPhases = (
+				CBC0E720435FC4C57E89A5FE /* Sources */,
+				2D532E0CC24E8D10AECB8BF4 /* Resources */,
+				A1A48D20F8A43279C72E33A0 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MongrelWordProcessor;
+			packageProductDependencies = (
+				B2D62DE8E2BC72FF84BA1FEB /* SharedFoundation */,
+			);
+			productName = MongrelWordProcessor;
+			productReference = 3B586887675402518D3AA9CC /* MongrelWordProcessor.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C109D8736EDF1297BBA21810 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = CF5D40AFA3F7D56AEC384FA3 /* Build configuration list for PBXProject "MongrelWordProcessor" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 72AA7D0BBC6AEBCCF7D3AE76;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A057EFDF3A173618A184E5A5 /* XCLocalSwiftPackageReference "../../mongrel-notes/MongrelNotes/SharedFoundation" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A23A1747672D5C435627F37F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C08F907B208FCDFB6185A8FE /* MongrelWordProcessor */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		2D532E0CC24E8D10AECB8BF4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3CE7A3CDA701FDAF89F330F6 /* README.txt in Resources */,
+				BD7B0D8773023F259981058C /* manifest.json in Resources */,
+				F41B7DA167516ECFD0F92E1F /* spellcheck_dictionary.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CBC0E720435FC4C57E89A5FE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0D7BF7893436D9F227282165 /* DocumentSession.swift in Sources */,
+				854040129A4D155F581A1566 /* FormattingBridge.swift in Sources */,
+				F502D8BCBB6E72F6C1FE4FEF /* MongrelDictionaryCompanionLexicon.swift in Sources */,
+				10A81EAD13E6BEB0CE558F8D /* MongrelWordProcessorApp.swift in Sources */,
+				AAB5FB7939344DB67E085C67 /* TextKit2EditorView.swift in Sources */,
+				17715AB8D6743910E99E9631 /* WordProcessorContentView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		00B2E3494829496D92911FBF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/MongrelWordProcessor.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = "";
+				INFOPLIST_FILE = App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mongrel Word Processor";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Mongrel";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongrel.wordprocessor;
+				PRODUCT_NAME = MongrelWordProcessor;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		61544DF9F3DF177314E3AEF7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		7496963430E5DAE5D7D9E3B8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/MongrelWordProcessor.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = "";
+				INFOPLIST_FILE = App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Mongrel Word Processor";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Mongrel";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mongrel.wordprocessor;
+				PRODUCT_NAME = MongrelWordProcessor;
+				SDKROOT = macosx;
+				STRIP_INSTALLED_PRODUCT = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		F6F610539BD8E0F2F72A9703 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		362FE838997142024B215875 /* Build configuration list for PBXNativeTarget "MongrelWordProcessor" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00B2E3494829496D92911FBF /* Debug */,
+				7496963430E5DAE5D7D9E3B8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CF5D40AFA3F7D56AEC384FA3 /* Build configuration list for PBXProject "MongrelWordProcessor" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				61544DF9F3DF177314E3AEF7 /* Debug */,
+				F6F610539BD8E0F2F72A9703 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A057EFDF3A173618A184E5A5 /* XCLocalSwiftPackageReference "../../mongrel-notes/MongrelNotes/SharedFoundation" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../mongrel-notes/MongrelNotes/SharedFoundation";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B2D62DE8E2BC72FF84BA1FEB /* SharedFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SharedFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = C109D8736EDF1297BBA21810 /* Project object */;
+}

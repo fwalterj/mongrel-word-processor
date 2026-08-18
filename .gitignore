@@ -24,3 +24,8 @@ DerivedData/
 
 # Logs
 *.log
+
+# Local research / nested repos not intended for first public history
+UsingTextKit2ToInteractWithText/
+mongrel-notes/
+userChrome-glass.css
