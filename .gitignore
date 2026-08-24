@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Xcode
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Certificates & signing
+*.cer
+*.p12
+*.p8
+*.provisionprofile
+
+# Logs
+*.log
+
+# Local research / nested repos not intended for first public history
+UsingTextKit2ToInteractWithText/
+mongrel-notes/
+userChrome-glass.css
