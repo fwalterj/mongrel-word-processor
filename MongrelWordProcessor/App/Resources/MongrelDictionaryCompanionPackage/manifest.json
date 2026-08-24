@@ -1,0 +1,18 @@
+{
+  "generatedAtUTC": "2026-05-04T14:46:14.458914+00:00",
+  "packageName": "MongrelDictionaryCompanionPackage",
+  "counts": {
+    "referenceNotes": 520,
+    "structuredEntries": 546,
+    "headwords": 529414
+  },
+  "files": [
+    "manifest.json",
+    "README.txt",
+    "structured_entries.json",
+    "structured_entries.tsv",
+    "headword_pool.txt",
+    "headword_pool.tsv",
+    "spellcheck_dictionary.txt"
+  ]
+}
