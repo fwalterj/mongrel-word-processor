@@ -22,9 +22,21 @@
   <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
-  <key>CFBundleDocumentTypes</key>
-  <array>
-    <dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Mongrel Screenplay</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.mongrel.screenplay</string>
+			</array>
+		</dict>
+		<dict>
       <key>CFBundleTypeName</key>
       <string>Rich Text Document</string>
       <key>CFBundleTypeRole</key>
@@ -32,11 +44,33 @@
       <key>LSHandlerRank</key>
       <string>Owner</string>
       <key>LSItemContentTypes</key>
-      <array>
-        <string>public.rtf</string>
-        <string>public.plain-text</string>
-      </array>
-    </dict>
-  </array>
+	      <array>
+	        <string>public.rtf</string>
+	        <string>public.plain-text</string>
+	      </array>
+	    </dict>
+	  </array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Mongrel Screenplay</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.mongrel.screenplay</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mgscreenplay</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/vnd.mongrel.screenplay+json</string>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>

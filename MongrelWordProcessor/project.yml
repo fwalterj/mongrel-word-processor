@@ -8,7 +8,7 @@ options:
 
 packages:
   SharedFoundation:
-    path: ../../mongrel-notes/MongrelNotes/SharedFoundation
+    path: Packages/SharedFoundation
 
 targets:
   MongrelWordProcessor:
@@ -24,6 +24,7 @@ targets:
 
     dependencies:
       - package: SharedFoundation
+      - sdk: PDFKit.framework
       - sdk: UniformTypeIdentifiers.framework
 
     settings:
@@ -51,3 +52,22 @@ targets:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
           DEAD_CODE_STRIPPING: YES
           STRIP_INSTALLED_PRODUCT: YES
+
+  MongrelWordProcessorTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+
+    sources:
+      - path: Tests
+
+    dependencies:
+      - target: MongrelWordProcessor
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mongrel.wordprocessor.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 5.9
+        MACOSX_DEPLOYMENT_TARGET: 14.0
+        SWIFT_STRICT_CONCURRENCY: complete

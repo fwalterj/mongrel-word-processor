@@ -30,6 +30,14 @@ struct RecentDoc: Identifiable, Codable {
     }
 }
 
+struct ScreenplayScene: Identifiable, Equatable {
+    let number: Int
+    let heading: String
+    let location: Int
+
+    var id: Int { location }
+}
+
 extension RecentDoc {
     /// Human-readable relative timestamp, e.g. "2 hours ago"
     var relativeDate: String {
@@ -40,6 +48,7 @@ extension RecentDoc {
 }
 
 import AppKit
+import PDFKit
 import UniformTypeIdentifiers
 import OSLog
 
@@ -48,7 +57,33 @@ struct ScreenplayPageLayout {
     static let contentWidth: CGFloat = 432
     static let horizontalInset: CGFloat = 90
     static let verticalInset: CGFloat = 72
+    static let contentHeight = pageSize.height - (verticalInset * 2)
+    static let pageBreakHeight = verticalInset * 2
     static let estimatedLinesPerPage: Double = 55
+
+    static func exclusionPaths(maximumPageCount: Int = 300) -> [NSBezierPath] {
+        guard maximumPageCount > 1 else { return [] }
+        return (1..<maximumPageCount).map { pageIndex in
+            let breakOrigin = (CGFloat(pageIndex) * pageSize.height) - pageBreakHeight
+            return NSBezierPath(rect: NSRect(
+                x: -1,
+                y: breakOrigin,
+                width: contentWidth + 2,
+                height: pageBreakHeight
+            ))
+        }
+    }
+
+    static func pageCount(forLaidOutContentHeight height: CGFloat) -> Int {
+        max(1, Int(ceil((max(height, 0) + pageBreakHeight) / pageSize.height)))
+    }
+}
+
+extension UTType {
+    static let mongrelScreenplay = UTType(
+        exportedAs: "com.mongrel.screenplay",
+        conformingTo: .data
+    )
 }
 
 extension NSAttributedString.Key {
@@ -181,6 +216,8 @@ enum CodeTheme: String, CaseIterable {
 
 @MainActor
 final class DocumentSession: ObservableObject {
+    static let openableDocumentTypes: [UTType] = [.mongrelScreenplay, .rtf, .plainText]
+
     @Published var title: String = "Untitled" {
         didSet {
             guard !isApplyingProgrammaticState else { return }
@@ -197,9 +234,17 @@ final class DocumentSession: ObservableObject {
     @Published private(set) var charCount: Int = 0
     @Published private(set) var screenplayPageCount: Int = 1
     @Published private(set) var screenplaySceneCount: Int = 0
+    @Published private(set) var screenplayScenes: [ScreenplayScene] = []
     @Published private(set) var recentDocuments: [RecentDoc] = []
     @Published var authoringMode: AuthoringMode = .prose {
         didSet {
+            guard authoringMode != oldValue else { return }
+            if currentURL == nil {
+                currentType = authoringMode == .screenplay ? .mongrelScreenplay : .plainText
+            }
+            if !isApplyingProgrammaticState {
+                hasUnsavedChanges = true
+            }
             updateMetrics()
         }
     }
@@ -209,17 +254,32 @@ final class DocumentSession: ObservableObject {
     @Published var codeTabWidth: Int = 4
     @Published var codeLineWrap: Bool = false
     @Published var screenplayElement: ScreenplayElement = .action
+    @Published private(set) var editorZoom: CGFloat = 1
+    @Published var typewriterMode: Bool = false {
+        didSet {
+            guard typewriterMode != oldValue else { return }
+            defaults.set(typewriterMode, forKey: typewriterModeKey)
+        }
+    }
 
     let formattingBridge = FormattingBridge()
-    let companionLexicon = MongrelDictionaryCompanionLexicon()
+    let companionLexicon: MongrelDictionaryCompanionLexicon
 
 
-    var canSaveDocument: Bool {
-        hasUnsavedChanges
-    }
+    /// A new, empty document is still saveable: Save should present Save As.
+    var canSaveDocument: Bool { true }
 
     var canCloseDocument: Bool {
         currentURL != nil || hasUnsavedChanges || attributedText.length > 0 || title != "Untitled"
+    }
+
+    var documentStatusLabel: String {
+        if hasUnsavedChanges { return "Unsaved" }
+        return currentURL == nil ? "New" : "Saved"
+    }
+
+    var editorZoomPercentage: Int {
+        Int((editorZoom * 100).rounded())
     }
 
     var companionSpellcheckSummary: String {
@@ -235,11 +295,23 @@ final class DocumentSession: ObservableObject {
 
     private var currentType: UTType = .plainText
     private var isApplyingProgrammaticState = false
-    private let persistenceStore = WordProcessorPersistenceStore()
+    private let persistenceStore: WordProcessorPersistenceStore
     private let auditLogger = WordProcessorAuditLogger()
+    private let defaults: UserDefaults
     private let recentDocsKey = "wordprocessor.recentDocs"
+    private let editorZoomKey = "wordprocessor.editorZoom"
+    private let typewriterModeKey = "wordprocessor.typewriterMode"
 
-    init() {
+    init(
+        defaults: UserDefaults = .standard,
+        companionLexicon: MongrelDictionaryCompanionLexicon = MongrelDictionaryCompanionLexicon()
+    ) {
+        self.defaults = defaults
+        self.persistenceStore = WordProcessorPersistenceStore(defaults: defaults)
+        self.companionLexicon = companionLexicon
+        let storedZoom = defaults.double(forKey: editorZoomKey)
+        self.editorZoom = storedZoom == 0 ? 1 : min(max(CGFloat(storedZoom), 0.6), 2)
+        self.typewriterMode = defaults.bool(forKey: typewriterModeKey)
         hasRestorableLastDocument = persistenceStore.hasLastDocumentBookmark
         auditLogger.info("session_initialized", metadata: ["hasRestorableLastDocument": hasRestorableLastDocument])
         auditLogger.info(
@@ -259,10 +331,26 @@ final class DocumentSession: ObservableObject {
             title = "Untitled"
             attributedText = NSAttributedString(string: "")
             currentURL = nil
-            currentType = .plainText
+            currentType = authoringMode == .screenplay ? .mongrelScreenplay : .plainText
             hasUnsavedChanges = false
         }
+        updateMetrics()
         auditLogger.info("new_document")
+    }
+
+    func newScreenplay() {
+        guard confirmCanAbandonChanges() else { return }
+        applyProgrammaticState {
+            title = "Untitled Screenplay"
+            attributedText = NSAttributedString(string: "")
+            currentURL = nil
+            currentType = .mongrelScreenplay
+            authoringMode = .screenplay
+            screenplayElement = .sceneHeading
+            hasUnsavedChanges = false
+        }
+        updateMetrics()
+        auditLogger.info("new_screenplay")
     }
 
     func closeDocument() {
@@ -272,9 +360,10 @@ final class DocumentSession: ObservableObject {
             title = "Untitled"
             attributedText = NSAttributedString(string: "")
             currentURL = nil
-            currentType = .plainText
+            currentType = authoringMode == .screenplay ? .mongrelScreenplay : .plainText
             hasUnsavedChanges = false
         }
+        updateMetrics()
         auditLogger.info("close_document")
     }
 
@@ -284,7 +373,24 @@ final class DocumentSession: ObservableObject {
     }
 
     func updateRenderedScreenplayPageCount(_ count: Int) {
-        screenplayPageCount = max(1, count)
+        let normalizedCount = max(1, count)
+        guard screenplayPageCount != normalizedCount else { return }
+        screenplayPageCount = normalizedCount
+    }
+
+    func adjustEditorZoom(by delta: CGFloat) {
+        setEditorZoom(editorZoom + delta)
+    }
+
+    func resetEditorZoom() {
+        setEditorZoom(1)
+    }
+
+    func setEditorZoom(_ zoom: CGFloat) {
+        let clamped = min(max(zoom, 0.6), 2)
+        guard abs(clamped - editorZoom) > 0.001 else { return }
+        editorZoom = clamped
+        defaults.set(Double(clamped), forKey: editorZoomKey)
     }
 
     func openDocument() {
@@ -294,7 +400,7 @@ final class DocumentSession: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.plainText, .rtf]
+        panel.allowedContentTypes = Self.openableDocumentTypes
 
         guard panel.runModal() == .OK, let url = panel.url else {
             auditLogger.info("open_document_cancelled")
@@ -302,7 +408,12 @@ final class DocumentSession: ObservableObject {
         }
 
         auditLogger.info("open_document_selected", metadata: ["file": url.lastPathComponent])
-        loadDocument(from: url)
+        openDocument(at: url)
+    }
+
+    func openExternalDocument(at url: URL) {
+        guard confirmCanAbandonChanges() else { return }
+        openDocument(at: url)
     }
 
     func reopenLastDocument() {
@@ -329,7 +440,7 @@ final class DocumentSession: ObservableObject {
             }
 
             auditLogger.info("reopen_last_resolved", metadata: ["file": url.lastPathComponent, "isStale": isStale])
-            loadDocument(from: url)
+            openDocument(at: url)
         } catch {
             presentError("Could Not Reopen Last Document", details: "The saved file reference is no longer valid.")
             persistenceStore.setLastDocumentBookmarkData(nil)
@@ -338,7 +449,17 @@ final class DocumentSession: ObservableObject {
         }
     }
 
-    private func loadDocument(from url: URL) {
+    /// Opens a concrete URL without presenting a panel. This is also used for
+    /// Finder-open events and keeps the actual file lifecycle testable.
+    @discardableResult
+    func openDocument(at url: URL) -> Bool {
+        let didAccessSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccessSecurityScope {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
         do {
             let loaded = try loadAttributedString(from: url)
             applyProgrammaticState {
@@ -346,6 +467,7 @@ final class DocumentSession: ObservableObject {
                 title = url.deletingPathExtension().lastPathComponent
                 currentURL = url
                 currentType = loaded.type
+                authoringMode = loaded.mode
                 hasUnsavedChanges = false
             }
             updateMetrics()
@@ -357,14 +479,15 @@ final class DocumentSession: ObservableObject {
 
             hasRestorableLastDocument = persistenceStore.hasLastDocumentBookmark
             auditLogger.info("load_document_success", metadata: ["file": url.lastPathComponent, "type": loaded.type.identifier])
+            return true
         } catch {
             presentError("Could not open file", details: error.localizedDescription)
             auditLogger.error("load_document_failed", error: error, metadata: ["file": url.lastPathComponent])
+            return false
         }
     }
 
     func saveDocument() {
-        guard canSaveDocument else { return }
         if let currentURL {
             writeDocument(to: currentURL, type: currentType)
         } else {
@@ -374,7 +497,7 @@ final class DocumentSession: ObservableObject {
 
     func saveDocumentAs() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText, .rtf]
+        panel.allowedContentTypes = [.mongrelScreenplay, .rtf, .plainText]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = suggestedFilename(for: currentType)
 
@@ -385,7 +508,9 @@ final class DocumentSession: ObservableObject {
 
         let ext = url.pathExtension.lowercased()
         let type: UTType
-        if ext == "rtf" {
+        if ext == "mgscreenplay" {
+            type = .mongrelScreenplay
+        } else if ext == "rtf" {
             type = .rtf
         } else if ext.isEmpty {
             // User removed the extension — honour whatever format is currently active.
@@ -393,7 +518,35 @@ final class DocumentSession: ObservableObject {
         } else {
             type = .plainText
         }
-        writeDocument(to: url, type: type)
+        saveDocument(to: url, type: type)
+    }
+
+    func saveDocumentCopyAs() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mongrelScreenplay, .rtf, .plainText]
+        panel.canCreateDirectories = true
+        let baseName = sanitizedFilenameStem(from: title)
+        let ext = currentType == .mongrelScreenplay
+            ? "mgscreenplay"
+            : (currentType.preferredFilenameExtension ?? "txt")
+        panel.nameFieldStringValue = "\(baseName)-copy.\(ext)"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            auditLogger.info("save_document_copy_cancelled")
+            return
+        }
+
+        let type = documentType(for: url)
+        if writeDocument(to: url, type: type, shouldTrackAsCurrent: false) {
+            auditLogger.info("save_document_copy_success", metadata: ["file": url.lastPathComponent])
+        }
+    }
+
+    /// Saves to a concrete URL without presenting a panel.
+    @discardableResult
+    func saveDocument(to url: URL, type: UTType? = nil) -> Bool {
+        let resolvedType = type ?? documentType(for: url)
+        return writeDocument(to: url, type: resolvedType)
     }
 
     func exportAsPDF() {
@@ -434,6 +587,26 @@ final class DocumentSession: ObservableObject {
         export(type: .rtf)
     }
 
+    func printDocument() {
+        guard let data = makePDFData(), let document = PDFDocument(data: data) else {
+            presentError("Could not print document", details: "The document could not be rendered for printing.")
+            return
+        }
+
+        let printInfo = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo()
+        guard let operation = document.printOperation(
+            for: printInfo,
+            scalingMode: .pageScaleToFit,
+            autoRotate: true
+        ) else {
+            presentError("Could not print document", details: "macOS could not create a print operation.")
+            return
+        }
+        operation.showsPrintPanel = true
+        operation.showsProgressPanel = true
+        operation.run()
+    }
+
     private func export(type: UTType) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [type]
@@ -451,7 +624,7 @@ final class DocumentSession: ObservableObject {
 
     private func suggestedFilename(for type: UTType) -> String {
         let safeTitle = sanitizedFilenameStem(from: title)
-        let ext = type.preferredFilenameExtension ?? "txt"
+        let ext = type == .mongrelScreenplay ? "mgscreenplay" : (type.preferredFilenameExtension ?? "txt")
         return "\(safeTitle).\(ext)"
     }
 
@@ -470,24 +643,51 @@ final class DocumentSession: ObservableObject {
         return cleaned.isEmpty ? "Untitled" : cleaned
     }
 
-    private func loadAttributedString(from url: URL) throws -> (text: NSAttributedString, type: UTType) {
+    private func documentType(for url: URL) -> UTType {
+        switch url.pathExtension.lowercased() {
+        case "mgscreenplay": return .mongrelScreenplay
+        case "rtf": return .rtf
+        case "txt", "text": return .plainText
+        default: return currentType
+        }
+    }
+
+    private func loadAttributedString(from url: URL) throws -> (text: NSAttributedString, type: UTType, mode: AuthoringMode) {
+        if url.pathExtension.lowercased() == "mgscreenplay" {
+            let archive = try JSONDecoder().decode(
+                MongrelScreenplayArchive.self,
+                from: Data(contentsOf: url)
+            )
+            return (try archive.makeAttributedString(), .mongrelScreenplay, .screenplay)
+        }
+
         if url.pathExtension.lowercased() == "rtf" {
             let text = try NSAttributedString(
                 url: url,
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
             )
-            return (text, .rtf)
+            return (text, .rtf, .prose)
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
-        return (NSAttributedString(string: text), .plainText)
+        return (NSAttributedString(string: text), .plainText, .prose)
     }
 
     @discardableResult
     private func writeDocument(to url: URL, type: UTType, shouldTrackAsCurrent: Bool = true) -> Bool {
+        let didAccessSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccessSecurityScope {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
         do {
-            if type == .rtf {
+            if type == .mongrelScreenplay {
+                let data = try JSONEncoder().encode(MongrelScreenplayArchive(attributedText: attributedText))
+                try data.write(to: url, options: .atomic)
+            } else if type == .rtf {
                 let range = NSRange(location: 0, length: attributedText.length)
                 let data = try attributedText.data(
                     from: range,
@@ -522,33 +722,15 @@ final class DocumentSession: ObservableObject {
         }
     }
 
-    private func makePDFData() -> Data? {
-        let contentSize = ScreenplayPageLayout.pageSize
-        let textStorage = NSTextStorage(attributedString: attributedText)
-        let layoutManager = NSLayoutManager()
-        let isScreenplay = authoringMode == .screenplay
-        let contentWidth = isScreenplay
-            ? ScreenplayPageLayout.contentWidth
-            : contentSize.width - 72
-        let textContainer = NSTextContainer(containerSize: NSSize(width: contentWidth, height: .greatestFiniteMagnitude))
-
-        layoutManager.addTextContainer(textContainer)
-        textStorage.addLayoutManager(layoutManager)
-
-        let textView = NSTextView(frame: NSRect(origin: .zero, size: contentSize), textContainer: textContainer)
-        if isScreenplay {
-            textView.minSize = contentSize
-            textView.maxSize = NSSize(width: contentSize.width, height: .greatestFiniteMagnitude)
-            textView.isHorizontallyResizable = false
-            textView.textContainerInset = NSSize(
-                width: ScreenplayPageLayout.horizontalInset,
-                height: ScreenplayPageLayout.verticalInset
-            )
-        } else {
-            textView.textContainerInset = NSSize(width: 36, height: 36)
-        }
-
-        return textView.dataWithPDF(inside: textView.bounds)
+    func makePDFData() -> Data? {
+        let margins = authoringMode == .screenplay
+            ? NSSize(width: ScreenplayPageLayout.horizontalInset, height: ScreenplayPageLayout.verticalInset)
+            : NSSize(width: 36, height: 36)
+        return PaginatedDocumentPDFRenderer.render(
+            attributedText,
+            margins: margins,
+            showsPageNumbers: authoringMode == .screenplay
+        )
     }
 
     private func confirmCanAbandonChanges() -> Bool {
@@ -598,7 +780,8 @@ extension DocumentSession {
         wordCount = words.count
         charCount = text.filter { !$0.isWhitespace && !$0.isNewline }.count
         screenplayPageCount = estimateScreenplayPageCount()
-        screenplaySceneCount = estimateScreenplaySceneCount()
+        screenplayScenes = collectScreenplayScenes()
+        screenplaySceneCount = screenplayScenes.count
     }
 
     private func estimateScreenplayPageCount() -> Int {
@@ -625,22 +808,26 @@ extension DocumentSession {
         return max(1, Int(ceil(totalEstimatedLines / ScreenplayPageLayout.estimatedLinesPerPage)))
     }
 
-    private func estimateScreenplaySceneCount() -> Int {
+    private func collectScreenplayScenes() -> [ScreenplayScene] {
         let text = attributedText.string as NSString
-        guard text.length > 0 else { return 0 }
+        guard text.length > 0 else { return [] }
 
-        var count = 0
+        var scenes: [ScreenplayScene] = []
         var index = 0
         while index < text.length {
             let paragraphRange = text.paragraphRange(for: NSRange(location: index, length: 0))
             let paragraph = text.substring(with: paragraphRange)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !paragraph.isEmpty && paragraphCountsAsScene(at: paragraphRange.location, text: paragraph) {
-                count += 1
+                scenes.append(ScreenplayScene(
+                    number: scenes.count + 1,
+                    heading: paragraph,
+                    location: paragraphRange.location
+                ))
             }
             index = NSMaxRange(paragraphRange)
         }
-        return count
+        return scenes
     }
 
     private var containsScreenplayAttributes: Bool {
@@ -704,7 +891,7 @@ extension DocumentSession {
     }
 
     private func loadRecentDocuments() {
-        guard let data = UserDefaults.standard.data(forKey: recentDocsKey),
+        guard let data = defaults.data(forKey: recentDocsKey),
               let docs = try? JSONDecoder().decode([RecentDoc].self, from: data) else { return }
         recentDocuments = docs
     }
@@ -725,12 +912,173 @@ extension DocumentSession {
             presentError("File Not Found", details: "'\(doc.title)' could not be found at its saved location.")
             return
         }
-        loadDocument(from: URL(fileURLWithPath: doc.path))
+        openDocument(at: URL(fileURLWithPath: doc.path))
+    }
+
+    func clearRecentDocuments() {
+        recentDocuments = []
+        persistRecentDocuments()
+        auditLogger.info("clear_recent_documents")
     }
 
     private func persistRecentDocuments() {
         guard let data = try? JSONEncoder().encode(recentDocuments) else { return }
-        UserDefaults.standard.set(data, forKey: recentDocsKey)
+        defaults.set(data, forKey: recentDocsKey)
+    }
+}
+
+private struct MongrelScreenplayArchive: Codable {
+    struct ElementRange: Codable {
+        let location: Int
+        let length: Int
+        let element: String
+    }
+
+    let formatVersion: Int
+    let richTextData: Data
+    let elementRanges: [ElementRange]
+
+    init(attributedText: NSAttributedString) throws {
+        formatVersion = 1
+        richTextData = try attributedText.data(
+            from: NSRange(location: 0, length: attributedText.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        )
+
+        var ranges: [ElementRange] = []
+        attributedText.enumerateAttribute(
+            .screenplayElement,
+            in: NSRange(location: 0, length: attributedText.length)
+        ) { value, range, _ in
+            guard let element = value as? String,
+                  ScreenplayElement(rawValue: element) != nil else { return }
+            ranges.append(ElementRange(location: range.location, length: range.length, element: element))
+        }
+        elementRanges = ranges
+    }
+
+    func makeAttributedString() throws -> NSAttributedString {
+        guard formatVersion == 1 else {
+            throw CocoaError(.fileReadUnsupportedScheme)
+        }
+
+        let restored = try NSMutableAttributedString(
+            data: richTextData,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+        )
+        for elementRange in elementRanges {
+            guard ScreenplayElement(rawValue: elementRange.element) != nil,
+                  elementRange.location >= 0,
+                  elementRange.length >= 0,
+                  elementRange.location + elementRange.length <= restored.length else { continue }
+            restored.addAttribute(
+                .screenplayElement,
+                value: elementRange.element,
+                range: NSRange(location: elementRange.location, length: elementRange.length)
+            )
+        }
+        return restored
+    }
+}
+
+@MainActor
+private enum PaginatedDocumentPDFRenderer {
+    static func render(
+        _ attributedText: NSAttributedString,
+        margins: NSSize,
+        showsPageNumbers: Bool
+    ) -> Data? {
+        let pageSize = ScreenplayPageLayout.pageSize
+        let contentSize = NSSize(
+            width: pageSize.width - (margins.width * 2),
+            height: pageSize.height - (margins.height * 2)
+        )
+        guard contentSize.width > 0, contentSize.height > 0 else { return nil }
+
+        let textStorage = NSTextStorage(attributedString: attributedText)
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+
+        var pages: [ScreenplayPDFPageView] = []
+        var laidOutGlyphs = 0
+
+        repeat {
+            let container = NSTextContainer(containerSize: contentSize)
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            layoutManager.ensureLayout(for: container)
+
+            let glyphRange = layoutManager.glyphRange(for: container)
+            pages.append(ScreenplayPDFPageView(
+                frame: NSRect(origin: .zero, size: pageSize),
+                layoutManager: layoutManager,
+                textContainer: container,
+                margins: margins,
+                pageNumber: showsPageNumbers ? pages.count + 1 : nil
+            ))
+
+            let nextGlyphLocation = NSMaxRange(glyphRange)
+            guard nextGlyphLocation > laidOutGlyphs else { break }
+            laidOutGlyphs = nextGlyphLocation
+        } while laidOutGlyphs < layoutManager.numberOfGlyphs
+
+        let document = PDFDocument()
+        for (index, pageView) in pages.enumerated() {
+            let pageData = pageView.dataWithPDF(inside: pageView.bounds)
+            guard let page = PDFDocument(data: pageData)?.page(at: 0) else { return nil }
+            document.insert(page, at: index)
+        }
+        return document.dataRepresentation()
+    }
+}
+
+@MainActor
+private final class ScreenplayPDFPageView: NSView {
+    private let layoutManager: NSLayoutManager
+    private let textContainer: NSTextContainer
+    private let margins: NSSize
+    private let pageNumber: Int?
+
+    init(
+        frame: NSRect,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer,
+        margins: NSSize,
+        pageNumber: Int?
+    ) {
+        self.layoutManager = layoutManager
+        self.textContainer = textContainer
+        self.margins = margins
+        self.pageNumber = pageNumber
+        super.init(frame: frame)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        bounds.fill()
+
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        let origin = NSPoint(x: margins.width, y: margins.height)
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+
+        guard let pageNumber else { return }
+        let pageLabel = "\(pageNumber)."
+        pageLabel.draw(
+            at: NSPoint(x: bounds.maxX - margins.width + 12, y: 18),
+            withAttributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+                .foregroundColor: NSColor.darkGray
+            ]
+        )
     }
 }
 

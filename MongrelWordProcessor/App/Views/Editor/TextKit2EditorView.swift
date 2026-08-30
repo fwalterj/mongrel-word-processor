@@ -1,13 +1,20 @@
 import SwiftUI
 import AppKit
+import SharedFoundation
 
 private final class ScreenplayTextView: NSTextView {
     var isScreenplayPaginationActive: Bool = false {
-        didSet { needsDisplay = true }
+        didSet {
+            guard isScreenplayPaginationActive != oldValue else { return }
+            needsDisplay = true
+        }
     }
 
     var screenplayPageCount: Int = 1 {
-        didSet { needsDisplay = true }
+        didSet {
+            guard screenplayPageCount != oldValue else { return }
+            needsDisplay = true
+        }
     }
 
     override var isOpaque: Bool { false }
@@ -20,9 +27,16 @@ private final class ScreenplayTextView: NSTextView {
     }
 
     private func drawScreenplayPages(in dirtyRect: NSRect) {
-        let pageColor = NSColor(calibratedWhite: 0.995, alpha: 1)
-        let seamColor = NSColor(calibratedWhite: 0.84, alpha: 1)
-        let numberColor = NSColor(calibratedWhite: 0.38, alpha: 1)
+        let appearance = MongrelAppearancePreferences.shared
+        let pageColor = appearance.mode == .standard
+            ? NSColor(calibratedWhite: 0.995, alpha: 1)
+            : NSColor(appearance.background)
+        let seamColor = appearance.mode == .standard
+            ? NSColor(calibratedWhite: 0.84, alpha: 1)
+            : NSColor(appearance.text).withAlphaComponent(0.62)
+        let numberColor = appearance.mode == .standard
+            ? NSColor(calibratedWhite: 0.38, alpha: 1)
+            : NSColor(appearance.text).withAlphaComponent(0.78)
         let pageWidth = ScreenplayPageLayout.pageSize.width
         let pageHeight = ScreenplayPageLayout.pageSize.height
 
@@ -76,6 +90,8 @@ struct TextKit2EditorView: NSViewRepresentable {
     let codeUseTabs: Bool
     let codeTabWidth: Int
     let codeLineWrap: Bool
+    let editorZoom: CGFloat
+    let typewriterMode: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -113,6 +129,10 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 0.6
+        scrollView.maxMagnification = 2
+        scrollView.magnification = editorZoom
         scrollView.drawsBackground = false
         scrollView.documentView = textView
 
@@ -121,6 +141,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.lastLanguage = codeLanguage
         context.coordinator.lastTheme = codeTheme
         context.coordinator.lastScreenplayElement = screenplayElement
+        context.coordinator.lastZoom = editorZoom
+        context.coordinator.lastTypewriterMode = typewriterMode
         bridge.textView = textView
         context.coordinator.applyEditorMode(authoringMode, to: textView)
         context.coordinator.applyCompanionSpellings(to: textView, fullDocument: true)
@@ -176,6 +198,18 @@ struct TextKit2EditorView: NSViewRepresentable {
             context.coordinator.lastLineWrap = codeLineWrap
             context.coordinator.applyLineWrap(codeLineWrap, to: nsView)
         }
+
+        if abs(context.coordinator.lastZoom - editorZoom) > 0.001 {
+            context.coordinator.lastZoom = editorZoom
+            nsView.animator().magnification = editorZoom
+        }
+
+        if context.coordinator.lastTypewriterMode != typewriterMode {
+            context.coordinator.lastTypewriterMode = typewriterMode
+            if typewriterMode {
+                context.coordinator.centerSelection(in: textView)
+            }
+        }
     }
 
     @MainActor
@@ -190,6 +224,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         var lastTabWidth: Int = 4
         var lastLineWrap: Bool = false
         var lastScreenplayElement: ScreenplayElement = .action
+        var lastZoom: CGFloat = 1
+        var lastTypewriterMode: Bool = false
         var ignoredCompanionWords: Set<String> = []
 
         init(_ parent: TextKit2EditorView) {
@@ -232,6 +268,9 @@ struct TextKit2EditorView: NSViewRepresentable {
                 parent.onScreenplayElementChange(parent.bridge.activeScreenplayElement)
                 updateScreenplayPagination(for: textView)
             }
+            if parent.typewriterMode {
+                centerSelection(in: textView)
+            }
         }
 
         func textView(
@@ -263,7 +302,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
             switch commandSelector {
             case #selector(NSResponder.insertNewline(_:)):
-                let nextElement = parent.bridge.detectedScreenplayElement(in: textView).nextOnReturn
+                let nextElement = parent.bridge.nextScreenplayElementOnReturn(in: textView)
                 textView.insertText("\n", replacementRange: textView.selectedRange())
                 parent.bridge.configureTypingAttributes(for: nextElement, in: textView)
                 parent.onScreenplayElementChange(nextElement)
@@ -294,16 +333,21 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isAutomaticTextReplacementEnabled = true
                 textView.isAutomaticSpellingCorrectionEnabled = true
                 textView.isContinuousSpellCheckingEnabled = true
+                textView.drawsBackground = false
                 applyStandardDocumentMetrics(to: textView)
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.lineHeightMultiple = 1.35
+                let appearance = MongrelAppearancePreferences.shared
+                let textColor = appearance.mode == .standard
+                    ? NSColor.labelColor
+                    : NSColor(appearance.text)
                 textView.typingAttributes = [
                     .font: NSFont.systemFont(ofSize: 14),
-                    .foregroundColor: NSColor.labelColor,
+                    .foregroundColor: textColor,
                     .paragraphStyle: paragraph
                 ]
                 textView.defaultParagraphStyle = paragraph
-                textView.insertionPointColor = .labelColor
+                textView.insertionPointColor = textColor
             case .code:
                 if let screenplayTextView = textView as? ScreenplayTextView {
                     screenplayTextView.isScreenplayPaginationActive = false
@@ -313,6 +357,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isAutomaticTextReplacementEnabled = false
                 textView.isAutomaticSpellingCorrectionEnabled = false
                 textView.isContinuousSpellCheckingEnabled = false
+                textView.drawsBackground = false
                 applyStandardDocumentMetrics(to: textView)
                 applyCodeHighlighting(to: textView)
             case .screenplay:
@@ -323,6 +368,11 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isAutomaticTextReplacementEnabled = false
                 textView.isAutomaticSpellingCorrectionEnabled = true
                 textView.isContinuousSpellCheckingEnabled = true
+                let appearance = MongrelAppearancePreferences.shared
+                textView.drawsBackground = true
+                textView.backgroundColor = appearance.mode == .standard
+                    ? NSColor(red: 0.97, green: 0.95, blue: 0.89, alpha: 1)
+                    : NSColor(appearance.background)
                 applyScreenplayPageMetrics(to: textView)
                 parent.bridge.configureTypingAttributes(for: parent.screenplayElement, in: textView)
             }
@@ -367,6 +417,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             textView.isVerticallyResizable = true
             textView.textContainer?.widthTracksTextView = true
             textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+            textView.textContainer?.exclusionPaths = []
             textView.textContainerInset = NSSize(width: 16, height: 16)
         }
 
@@ -380,6 +431,9 @@ struct TextKit2EditorView: NSViewRepresentable {
                 width: ScreenplayPageLayout.contentWidth,
                 height: CGFloat.greatestFiniteMagnitude
             )
+            // Full-width exclusions create a real bottom and top margin at each
+            // page boundary instead of merely painting a line behind flowing text.
+            textView.textContainer?.exclusionPaths = ScreenplayPageLayout.exclusionPaths()
             textView.textContainerInset = NSSize(
                 width: ScreenplayPageLayout.horizontalInset,
                 height: ScreenplayPageLayout.verticalInset
@@ -390,20 +444,41 @@ struct TextKit2EditorView: NSViewRepresentable {
             guard parent.authoringMode == .screenplay else { return }
 
             let contentHeight = measuredScreenplayContentHeight(in: textView)
-            let pageContentHeight = ScreenplayPageLayout.pageSize.height - (ScreenplayPageLayout.verticalInset * 2)
-            let requiredPages = max(1, Int(ceil(max(contentHeight, 1) / pageContentHeight)))
+            let requiredPages = ScreenplayPageLayout.pageCount(forLaidOutContentHeight: contentHeight)
             let requiredHeight = CGFloat(requiredPages) * ScreenplayPageLayout.pageSize.height
             let visibleHeight = textView.enclosingScrollView?.contentSize.height ?? ScreenplayPageLayout.pageSize.height
             let finalHeight = max(requiredHeight, visibleHeight)
 
-            textView.minSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: finalHeight)
-            textView.setFrameSize(NSSize(width: ScreenplayPageLayout.pageSize.width, height: finalHeight))
+            let requiredSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: finalHeight)
+            if textView.minSize != requiredSize {
+                textView.minSize = requiredSize
+            }
+            if textView.frame.size != requiredSize {
+                textView.setFrameSize(requiredSize)
+            }
 
-            if let screenplayTextView = textView as? ScreenplayTextView {
+            if let screenplayTextView = textView as? ScreenplayTextView,
+               screenplayTextView.screenplayPageCount != requiredPages {
                 screenplayTextView.screenplayPageCount = requiredPages
             }
 
             parent.onPaginationChange(requiredPages)
+        }
+
+        func centerSelection(in textView: NSTextView) {
+            guard let scrollView = textView.enclosingScrollView else { return }
+            let selection = textView.selectedRange()
+            var actualRange = NSRange(location: NSNotFound, length: 0)
+            let screenRect = textView.firstRect(forCharacterRange: selection, actualRange: &actualRange)
+            guard !screenRect.isEmpty, let window = textView.window else { return }
+
+            let windowRect = window.convertFromScreen(screenRect)
+            let localRect = textView.convert(windowRect, from: nil)
+            let clipView = scrollView.contentView
+            let maximumY = max(0, textView.bounds.height - clipView.bounds.height)
+            let targetY = min(max(0, localRect.midY - (clipView.bounds.height * 0.45)), maximumY)
+            clipView.animator().setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: targetY))
+            scrollView.reflectScrolledClipView(clipView)
         }
 
         private func measuredScreenplayContentHeight(in textView: NSTextView) -> CGFloat {
@@ -485,6 +560,11 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
 
         private func currentTheme() -> (base: NSColor, keyword: NSColor, string: NSColor, comment: NSColor, caret: NSColor) {
+            let appearance = MongrelAppearancePreferences.shared
+            if appearance.mode != .standard {
+                let text = NSColor(appearance.text)
+                return (text, text, text, text.withAlphaComponent(0.72), text)
+            }
             switch parent.codeTheme {
             case .cobalt:
                 return (

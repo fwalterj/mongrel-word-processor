@@ -1,81 +1,66 @@
 # Mongrel Word Processor
 
-A native macOS word processor — part of the Mongrel app suite.
+A native macOS writing environment that treats prose and screenplays as first-class documents. Mongrel Word Processor is an in-progress, source-visible member of the Mongrel suite, built for local work rather than an account, cloud, or App Store funnel.
 
-## Overview
+![Screenplay workspace with scene navigation and true pagination](MongrelWordProcessor/Screenshots/screenplay-workspace.png)
 
-Mongrel Word Processor is a native document editor built with TextKit 2. It now supports prose, code, and screenplay authoring, plus a companion-lexicon bridge to Mongrel Dictionary for custom spellcheck coverage.
+## What works
+
+- Native prose, code, and screenplay authoring modes.
+- True US Letter screenplay pages with live page and scene counts.
+- Scene heading, action, character, parenthetical, dialogue, transition, shot, insert/title card, and time-jump elements.
+- Contextual screenplay suggestions, Tab/Shift-Tab element cycling, and whole-document auto-formatting.
+- A scene navigator that jumps directly to detected headings.
+- Native `.mgscreenplay` files that retain semantic screenplay elements, plus RTF and plain-text opening and saving.
+- PDF, RTF, and plain-text export.
+- Focus and typewriter modes, zoom controls, recent documents, and a command palette.
+- Standard, high-contrast, and custom color viewing modes.
+- Offline spellchecking with a bundled Mongrel Dictionary companion lexicon. The full Dictionary app remains a separate install and integration target.
+
+![Distraction-free screenplay focus mode](MongrelWordProcessor/Screenshots/focus-mode.png)
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Language | Swift |
-| Text engine | TextKit 2 (NSTextView + NSTextLayoutManager) |
-| UI | SwiftUI + AppKit |
-| Build | XcodeGen (`project.yml`) |
-| Platform | macOS |
+| Language | Swift 5.9 |
+| Text engine | TextKit 2 (`NSTextView` and `NSTextLayoutManager`) |
+| UI | SwiftUI and AppKit |
+| Project generation | XcodeGen |
+| Platform | macOS 14+, Apple silicon |
 
-## Structure
+## Build
 
-```
-MongrelWordProcessor/
-└── App/
-    ├── MongrelWordProcessorApp.swift   # @main entry
-    ├── Views/
-    │   ├── WordProcessorContentView.swift
-    │   └── Editor/
-    │       └── TextKit2EditorView.swift
-    └── ViewModels/
-        ├── DocumentSession.swift
-        └── FormattingBridge.swift
+Open `MongrelWordProcessor/MongrelWordProcessor.xcodeproj`, select the `MongrelWordProcessor` scheme, and run. The visual foundation needed by the app is included under `MongrelWordProcessor/Packages/SharedFoundation`, so a clone does not depend on another Mongrel repository.
+
+To regenerate the project after changing `project.yml`:
+
+```bash
+cd MongrelWordProcessor
+xcodegen generate
 ```
 
-## What was built
+Run the automated suite with:
 
-### `TextKit2EditorView.swift`
-- `NSViewRepresentable` wrapping `NSTextView` wired to a full TextKit 2 stack (`NSTextContentStorage` → `NSTextLayoutManager` → `NSTextContainer`).
-- `allowsUndo`, `usesFindBar`, continuous spell-checking, smart quotes, auto-text-replacement all enabled.
-- 1.35× line-height paragraph style injected by default.
-- Bridges back to SwiftUI via `@Binding var attributedText` and an `onEdit` callback.
-- Augments system spellcheck with the Mongrel Dictionary companion lexicon so suite-specific valid words can be ignored and suggested.
+```bash
+cd MongrelWordProcessor
+xcodebuild test \
+  -project MongrelWordProcessor.xcodeproj \
+  -scheme MongrelWordProcessor \
+  -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO
+```
 
-### `DocumentSession.swift`
-- `AuthoringMode` enum: `.prose` / `.code` / `.screenplay` — switches editor behaviour and toolbar affordances.
-- `CodeLanguage` enum: Swift, JavaScript, and more — drives syntax-hint injection.
-- `CodeTheme`, `codeUseTabs`, `codeTabWidth`, `codeLineWrap` preferences.
-- `RecentDoc` model: `Identifiable + Codable`, stores title, file path, `openedAt` date; exposes `relativeDate` via `RelativeDateTimeFormatter`.
-- Screenplay pagination, scene counting, screenplay element switching, and live companion-lexicon status.
+## Dictionary companion
 
-### `FormattingBridge.swift`
-- Bridges bold/italic/underline/heading formatting commands from SwiftUI toolbar buttons into `NSTextView` attribute mutations without breaking TextKit 2's layout pass.
-- Adds screenplay auto-formatting and contextual suggestions for scene headings, shots, inserts, title cards, transitions, and time jumps.
-
-## Dictionary companion import
-
-The word processor can consume the dictionary app's exported companion package without turning the two apps into one repo or one runtime.
+The bundled lexicon allows comprehensive offline spellcheck without absorbing the Dictionary app into this repository. When the Dictionary project produces a newer companion export, import it with:
 
 ```bash
 ./Scripts/import-dictionary-companion.sh
 ```
 
-That imports the latest `MongrelDictionaryCompanionPackage` into `MongrelWordProcessor/App/Resources/`.
+## Status
 
-## Build command
+This is development software, not a finished release. File creation, saving, reopening, screenplay semantics, pagination, export, accessibility palettes, and editor integration have automated coverage. Destructive editing and unusual import files still deserve real-world testing before a public beta binary.
 
-```bash
-cd MongrelWordProcessor
-xcodegen generate
-xcodebuild -project MongrelWordProcessor.xcodeproj \
-           -scheme MongrelWordProcessor \
-           -destination 'platform=macOS' \
-           CODE_SIGNING_ALLOWED=NO build
-```
-
-## Build status
-
-Build verified on macOS with `xcodebuild`.
-
-## License
-
-Proprietary — Mongrel Suite
+The source is currently viewable, but no open-source license has been granted yet.

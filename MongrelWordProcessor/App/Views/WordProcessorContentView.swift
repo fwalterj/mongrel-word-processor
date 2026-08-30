@@ -3,12 +3,15 @@ import SharedFoundation
 
 struct WordProcessorContentView: View {
     @EnvironmentObject private var session: DocumentSession
+    @ObservedObject private var appearance = MongrelAppearancePreferences.shared
     @State private var showShortcutHelp: Bool = false
     @State private var showCommandPalette: Bool = false
     @State private var commandQuery: String = ""
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isFocusMode: Bool = false
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
         } detail: {
             detailPane
@@ -17,6 +20,11 @@ struct WordProcessorContentView: View {
         .background(DesignTokens.glassDeep.ignoresSafeArea())
         .sheet(isPresented: $showCommandPalette) {
             WordProcessorCommandPaletteView(query: $commandQuery, onRunAction: runCommandPaletteAction)
+        }
+        .onExitCommand {
+            if isFocusMode {
+                setFocusMode(false)
+            }
         }
     }
 
@@ -31,15 +39,31 @@ struct WordProcessorContentView: View {
                     .foregroundStyle(DesignTokens.chromeText.opacity(0.45))
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.top, 34)
+            .padding(.bottom, 12)
 
             Divider().overlay(DesignTokens.borderRim)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Recent Documents")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
-                    .textCase(.uppercase)
+                HStack {
+                    Text("Recent Documents")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
+                        .textCase(.uppercase)
+                    Spacer()
+                    Menu {
+                        Button("Clear Recent Documents") {
+                            session.clearRecentDocuments()
+                        }
+                        .disabled(session.recentDocuments.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(DesignTokens.chromeText.opacity(0.5))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
 
                 if session.recentDocuments.isEmpty {
                     Text("No recent files")
@@ -81,6 +105,10 @@ struct WordProcessorContentView: View {
             }
             .padding(12)
 
+            if session.authoringMode == .screenplay {
+                screenplaySceneNavigator
+            }
+
             Spacer()
 
             VStack(alignment: .leading, spacing: 8) {
@@ -96,7 +124,7 @@ struct WordProcessorContentView: View {
                     statLine("Pages", value: "\(session.screenplayPageCount)")
                     statLine("Scenes", value: "\(session.screenplaySceneCount)")
                 }
-                statLine("State", value: session.hasUnsavedChanges ? "Unsaved" : "Saved")
+                statLine("State", value: session.documentStatusLabel)
             }
             .padding(12)
             .glassChromeBackground(style: .card, cornerRadius: 0)
@@ -105,17 +133,80 @@ struct WordProcessorContentView: View {
         .glassChromeBackground(style: .deep, cornerRadius: 0)
     }
 
+    private var screenplaySceneNavigator: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Scenes")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .textCase(.uppercase)
+                Spacer()
+                Text("\(session.screenplayScenes.count)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
+
+            if session.screenplayScenes.isEmpty {
+                Text("Scene headings appear here as you draft.")
+                    .font(.caption)
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.4))
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 5) {
+                        ForEach(session.screenplayScenes) { scene in
+                            Button {
+                                session.formattingBridge.focusScreenplayLocation(scene.location)
+                            } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("\(scene.number)")
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(DesignTokens.accent)
+                                        .frame(width: 20, alignment: .trailing)
+                                    Text(scene.heading)
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                                        .lineLimit(2)
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(DesignTokens.glassCard.opacity(0.72), in: RoundedRectangle(cornerRadius: 7))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
     private var detailPane: some View {
         VStack(spacing: 0) {
-            topChrome
-            Divider().overlay(DesignTokens.borderRim)
-            formattingToolbar
-            Divider().overlay(DesignTokens.borderRim)
+            if !isFocusMode {
+                topChrome
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().overlay(DesignTokens.borderRim)
+                formattingToolbar
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().overlay(DesignTokens.borderRim)
+            }
             editorArea
-            Divider().overlay(DesignTokens.borderRim)
-            statusBar
+            if !isFocusMode {
+                Divider().overlay(DesignTokens.borderRim)
+                statusBar
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .background(DesignTokens.glassDeep)
+        .overlay(alignment: .topTrailing) {
+            if isFocusMode {
+                focusModeControls
+                    .padding(14)
+            }
+        }
     }
 
     private var topChrome: some View {
@@ -149,11 +240,18 @@ struct WordProcessorContentView: View {
 
             Spacer()
 
-            Button("New") {
-                session.newDocument()
+            Menu {
+                Button("New Document") {
+                    session.newDocument()
+                }
+                Button("New Screenplay") {
+                    session.newScreenplay()
+                }
+            } label: {
+                Text("New")
             }
-            .buttonStyle(.plain)
-            .controlSize(.small)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
 
             Button("Open") {
                 session.openDocument()
@@ -274,6 +372,10 @@ struct WordProcessorContentView: View {
             }
 
             Menu {
+                Button("Save a Copy...") {
+                    session.saveDocumentCopyAs()
+                }
+                Divider()
                 Button("Export as PDF...") {
                     session.exportAsPDF()
                 }
@@ -283,6 +385,10 @@ struct WordProcessorContentView: View {
                 Button("Export as Plain Text...") {
                     session.exportAsPlainText()
                 }
+                Divider()
+                Button("Print...") {
+                    session.printDocument()
+                }
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "square.and.arrow.up")
@@ -291,6 +397,16 @@ struct WordProcessorContentView: View {
                 .foregroundStyle(DesignTokens.accent)
             }
             .menuStyle(.borderlessButton)
+
+            Button {
+                setFocusMode(true)
+            } label: {
+                Image(systemName: "viewfinder")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .buttonStyle(.plain)
+            .help("Focus mode")
+            .keyboardShortcut("f", modifiers: [.command, .shift])
 
             Button {
                 showCommandPalette = true
@@ -382,6 +498,18 @@ struct WordProcessorContentView: View {
 
                 Divider().frame(height: 14)
 
+                Button {
+                    session.formattingBridge.autoFormatEntireScreenplay()
+                } label: {
+                    Label("Auto Format", systemImage: "wand.and.stars")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(DesignTokens.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Format every paragraph using screenplay context")
+
+                Divider().frame(height: 14)
+
                 Text("Tab cycles elements")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(DesignTokens.chromeText.opacity(0.62))
@@ -428,7 +556,13 @@ struct WordProcessorContentView: View {
     private var editorArea: some View {
         VStack(alignment: .leading, spacing: 0) {
             if session.authoringMode == .screenplay {
-                screenplayEditorCanvas
+                ScrollView([.horizontal, .vertical]) {
+                    screenplayEditorCanvas
+                        .frame(
+                            minWidth: ScreenplayPageLayout.pageSize.width + 56,
+                            minHeight: ScreenplayPageLayout.pageSize.height + 36
+                        )
+                }
             } else {
                 coreEditor
                     .background(selectedEditorBackground)
@@ -447,6 +581,12 @@ struct WordProcessorContentView: View {
                 endPoint: .bottom
             )
         )
+        .overlay {
+            if session.attributedText.length == 0 {
+                emptyDocumentHint
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var screenplayPageSummary: String {
@@ -477,7 +617,9 @@ struct WordProcessorContentView: View {
             codeTheme: session.codeTheme,
             codeUseTabs: session.codeUseTabs,
             codeTabWidth: session.codeTabWidth,
-            codeLineWrap: session.codeLineWrap
+            codeLineWrap: session.codeLineWrap,
+            editorZoom: session.editorZoom,
+            typewriterMode: session.typewriterMode
         )
     }
 
@@ -491,7 +633,7 @@ struct WordProcessorContentView: View {
                     Text(screenplayPageSummary)
                 }
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.45))
+                .foregroundStyle(screenplayPaperForeground.opacity(0.58))
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
 
@@ -504,12 +646,12 @@ struct WordProcessorContentView: View {
             .frame(width: ScreenplayPageLayout.pageSize.width)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(0.97))
+                    .fill(screenplayPaperBackground)
                     .shadow(color: Color.black.opacity(0.08), radius: 28, x: 0, y: 18)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    .stroke(screenplayPaperForeground.opacity(0.18), lineWidth: 1)
             )
             Spacer(minLength: 28)
         }
@@ -534,6 +676,8 @@ struct WordProcessorContentView: View {
                 Text(session.screenplayElement.shortTitle)
             }
             Spacer()
+            writingControls
+            Text("·")
             if let url = session.currentURL {
                 Text(url.lastPathComponent)
                     .lineLimit(1)
@@ -546,6 +690,108 @@ struct WordProcessorContentView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .glassChromeBackground(style: .deep, cornerRadius: 0)
+    }
+
+    private var writingControls: some View {
+        HStack(spacing: 7) {
+            Button {
+                session.typewriterMode.toggle()
+            } label: {
+                Image(systemName: session.typewriterMode ? "scope" : "scope")
+                    .foregroundStyle(session.typewriterMode ? DesignTokens.accent : DesignTokens.chromeText.opacity(0.62))
+            }
+            .buttonStyle(.plain)
+            .help("Keep the current line near the center")
+
+            Button {
+                session.adjustEditorZoom(by: -0.1)
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .buttonStyle(.plain)
+            .disabled(session.editorZoom <= 0.6)
+
+            Button {
+                session.resetEditorZoom()
+            } label: {
+                Text("\(session.editorZoomPercentage)%")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .frame(minWidth: 34)
+            }
+            .buttonStyle(.plain)
+            .help("Reset zoom")
+
+            Button {
+                session.adjustEditorZoom(by: 0.1)
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .buttonStyle(.plain)
+            .disabled(session.editorZoom >= 2)
+        }
+    }
+
+    private var focusModeControls: some View {
+        HStack(spacing: 10) {
+            Text(session.title)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .frame(maxWidth: 180, alignment: .leading)
+
+            writingControls
+
+            Button {
+                setFocusMode(false)
+            } label: {
+                Label("Exit Focus", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+            }
+            .buttonStyle(.plain)
+            .help("Exit focus mode (Esc)")
+        }
+        .foregroundStyle(DesignTokens.chromeText.opacity(0.86))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .glassChromeBackground(style: .card, cornerRadius: 12)
+    }
+
+    private var emptyDocumentHint: some View {
+        VStack(spacing: 9) {
+            Image(systemName: session.authoringMode == .screenplay ? "film.stack" : "text.cursor")
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(DesignTokens.accent.opacity(0.72))
+            Text(session.authoringMode == .screenplay ? "Begin with a scene heading" : "Click anywhere and begin writing")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.68))
+            Text(emptyDocumentDetail)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.4))
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+        .background(DesignTokens.glassElevated.opacity(0.66), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(DesignTokens.borderRim, lineWidth: 0.6)
+        )
+    }
+
+    private var emptyDocumentDetail: String {
+        if isFocusMode {
+            return "Esc exits focus mode"
+        }
+        if session.authoringMode == .screenplay {
+            return "Try INT. or EXT. · Tab changes element"
+        }
+        return "Cmd-S saves · Cmd-Shift-F enters focus mode"
+    }
+
+    private func setFocusMode(_ enabled: Bool) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isFocusMode = enabled
+            columnVisibility = enabled ? .detailOnly : .all
+        }
+        session.formattingBridge.focusEditor()
     }
 
     private func statLine(_ key: String, value: String) -> some View {
@@ -606,12 +852,14 @@ struct WordProcessorContentView: View {
                     endPoint: .bottomTrailing
                 )
             } else if session.authoringMode == .screenplay {
-                Color(red: 0.97, green: 0.95, blue: 0.89)
-                LinearGradient(
-                    colors: [Color(red: 0.84, green: 0.78, blue: 0.62).opacity(0.22), .clear],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                screenplayPaperBackground
+                if appearance.mode == .standard {
+                    LinearGradient(
+                        colors: [Color(red: 0.84, green: 0.78, blue: 0.62).opacity(0.22), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
             } else {
                 DesignTokens.glassCard
                 LinearGradient(
@@ -621,6 +869,16 @@ struct WordProcessorContentView: View {
                 )
             }
         }
+    }
+
+    private var screenplayPaperBackground: Color {
+        appearance.mode == .standard
+            ? Color(red: 0.97, green: 0.95, blue: 0.89)
+            : appearance.background
+    }
+
+    private var screenplayPaperForeground: Color {
+        appearance.mode == .standard ? .black : appearance.text
     }
 
     private var codeBackground: (Color, Color) {
@@ -643,10 +901,24 @@ struct WordProcessorContentView: View {
             shortcutSection(
                 "File",
                 items: [
+                    ("Cmd + N", "New document"),
+                    ("Cmd + Shift + N", "New screenplay"),
                     ("Cmd + O", "Open document"),
                     ("Cmd + S", "Save document"),
                     ("Cmd + Shift + S", "Save As"),
+                    ("Cmd + P", "Print document"),
                     ("Cmd + K", "Command palette")
+                ]
+            )
+
+            shortcutSection(
+                "Writing",
+                items: [
+                    ("Cmd + Shift + F", "Enter focus mode"),
+                    ("Esc", "Exit focus mode"),
+                    ("Cmd + Option + T", "Typewriter scrolling"),
+                    ("Cmd + + / -", "Zoom in / out"),
+                    ("Cmd + 0", "Actual size")
                 ]
             )
 
@@ -710,10 +982,31 @@ struct WordProcessorContentView: View {
         switch action {
         case .newDocument:
             session.newDocument()
+        case .newScreenplay:
+            session.newScreenplay()
         case .openDocument:
             session.openDocument()
         case .saveDocument:
             session.saveDocument()
+        case .saveCopy:
+            session.saveDocumentCopyAs()
+        case .printDocument:
+            session.printDocument()
+        case .toggleFocusMode:
+            setFocusMode(!isFocusMode)
+        case .toggleTypewriterMode:
+            session.typewriterMode.toggle()
+        case .zoomIn:
+            session.adjustEditorZoom(by: 0.1)
+        case .zoomOut:
+            session.adjustEditorZoom(by: -0.1)
+        case .resetZoom:
+            session.resetEditorZoom()
+        case .clearRecentDocuments:
+            session.clearRecentDocuments()
+        case .autoFormatScreenplay:
+            session.authoringMode = .screenplay
+            session.formattingBridge.autoFormatEntireScreenplay()
         case .setMode(let mode):
             session.authoringMode = mode
         case .setScreenplayElement(let element):
@@ -732,8 +1025,18 @@ struct WordProcessorContentView: View {
 
 private enum WordProcessorPaletteAction: Hashable {
     case newDocument
+    case newScreenplay
     case openDocument
     case saveDocument
+    case saveCopy
+    case printDocument
+    case toggleFocusMode
+    case toggleTypewriterMode
+    case zoomIn
+    case zoomOut
+    case resetZoom
+    case clearRecentDocuments
+    case autoFormatScreenplay
     case setMode(AuthoringMode)
     case setScreenplayElement(ScreenplayElement)
     case setLanguage(CodeLanguage)
@@ -742,8 +1045,18 @@ private enum WordProcessorPaletteAction: Hashable {
     var title: String {
         switch self {
         case .newDocument: return "New Document"
+        case .newScreenplay: return "New Screenplay"
         case .openDocument: return "Open Document"
         case .saveDocument: return "Save Document"
+        case .saveCopy: return "Save a Copy"
+        case .printDocument: return "Print Document"
+        case .toggleFocusMode: return "Toggle Focus Mode"
+        case .toggleTypewriterMode: return "Toggle Typewriter Scrolling"
+        case .zoomIn: return "Zoom In"
+        case .zoomOut: return "Zoom Out"
+        case .resetZoom: return "Actual Size"
+        case .clearRecentDocuments: return "Clear Recent Documents"
+        case .autoFormatScreenplay: return "Screenplay: Auto Format Document"
         case .setMode(let mode): return "Authoring Mode: \(mode.title)"
         case .setScreenplayElement(let element): return "Screenplay Element: \(element.title)"
         case .setLanguage(let language): return "Code Language: \(language.title)"
@@ -754,8 +1067,18 @@ private enum WordProcessorPaletteAction: Hashable {
     var symbol: String {
         switch self {
         case .newDocument: return "doc.badge.plus"
+        case .newScreenplay: return "film.stack"
         case .openDocument: return "folder"
         case .saveDocument: return "square.and.arrow.down"
+        case .saveCopy: return "doc.on.doc"
+        case .printDocument: return "printer"
+        case .toggleFocusMode: return "viewfinder"
+        case .toggleTypewriterMode: return "scope"
+        case .zoomIn: return "plus.magnifyingglass"
+        case .zoomOut: return "minus.magnifyingglass"
+        case .resetZoom: return "1.magnifyingglass"
+        case .clearRecentDocuments: return "clock.arrow.circlepath"
+        case .autoFormatScreenplay: return "wand.and.stars"
         case .setMode: return "rectangle.2.swap"
         case .setScreenplayElement: return "film"
         case .setLanguage: return "chevron.left.forwardslash.chevron.right"
@@ -814,14 +1137,17 @@ private struct WordProcessorCommandPaletteView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let match: (WordProcessorPaletteAction) -> Bool = { q.isEmpty || fuzzyMatches(q, in: $0.title) }
 
-        let fileItems  = [WordProcessorPaletteAction.newDocument, .openDocument, .saveDocument].filter(match)
+        let fileItems  = [WordProcessorPaletteAction.newDocument, .newScreenplay, .openDocument, .saveDocument, .saveCopy, .printDocument, .clearRecentDocuments].filter(match)
+        let writingItems = [WordProcessorPaletteAction.toggleFocusMode, .toggleTypewriterMode, .zoomIn, .zoomOut, .resetZoom].filter(match)
         let modeItems  = AuthoringMode.allCases.map { WordProcessorPaletteAction.setMode($0) }.filter(match)
-        let screenplayItems = ScreenplayElement.allCases.map { WordProcessorPaletteAction.setScreenplayElement($0) }.filter(match)
+        let screenplayItems = ([WordProcessorPaletteAction.autoFormatScreenplay]
+            + ScreenplayElement.allCases.map { WordProcessorPaletteAction.setScreenplayElement($0) }).filter(match)
         let langItems  = CodeLanguage.allCases.map { WordProcessorPaletteAction.setLanguage($0) }.filter(match)
         let themeItems = CodeTheme.allCases.map { WordProcessorPaletteAction.setTheme($0) }.filter(match)
 
         var sections: [PaletteSection] = []
         if !fileItems.isEmpty  { sections.append(PaletteSection(title: "File",       items: fileItems))  }
+        if !writingItems.isEmpty { sections.append(PaletteSection(title: "Writing", items: writingItems)) }
         if !modeItems.isEmpty  { sections.append(PaletteSection(title: "Mode",       items: modeItems))  }
         if !screenplayItems.isEmpty { sections.append(PaletteSection(title: "Screenplay", items: screenplayItems)) }
         if !langItems.isEmpty  { sections.append(PaletteSection(title: "Language",   items: langItems))  }

@@ -48,6 +48,22 @@ final class MongrelDictionaryCompanionLexicon {
         )
     }
 
+    init(headwords: [String], sourceDescription: String = "Injected lexicon") {
+        let normalizedHeadwords = headwords
+            .map(Self.normalizedLookupKey)
+            .filter { !$0.isEmpty }
+        let uniqueHeadwords = Array(Set(normalizedHeadwords)).sorted()
+
+        self.headwords = Set(uniqueHeadwords)
+        self.sortedHeadwords = uniqueHeadwords
+        self.status = MongrelDictionaryCompanionStatus(
+            isAvailable: !uniqueHeadwords.isEmpty,
+            sourceDescription: sourceDescription,
+            headwordCount: uniqueHeadwords.count,
+            structuredEntryCount: 0
+        )
+    }
+
     func contains(_ word: String) -> Bool {
         headwords.contains(Self.normalizedLookupKey(word))
     }

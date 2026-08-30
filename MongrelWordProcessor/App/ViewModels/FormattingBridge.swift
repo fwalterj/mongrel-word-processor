@@ -1,4 +1,5 @@
 import AppKit
+import SharedFoundation
 
 private struct ScreenplayStyle {
     let font: NSFont
@@ -151,7 +152,7 @@ final class FormattingBridge: ObservableObject {
         screenplayAttributes(for: element).forEach { attrs[$0.key] = $0.value }
         tv.typingAttributes = attrs
         tv.defaultParagraphStyle = screenplayStyle(for: element).paragraphStyle
-        tv.insertionPointColor = .labelColor
+        tv.insertionPointColor = NSColor(MongrelAppearancePreferences.shared.text)
         activeScreenplayElement = element
         screenplaySuggestions = makeScreenplaySuggestions(in: tv, activeElement: element)
     }
@@ -159,20 +160,60 @@ final class FormattingBridge: ObservableObject {
     func detectedScreenplayElement(in tv: NSTextView) -> ScreenplayElement {
         let range = tv.selectedRange()
 
-        if let tagged = tv.typingAttributes[.screenplayElement] as? String,
-           let element = ScreenplayElement(rawValue: tagged) {
-            return element
-        }
-
         if let ts = tv.textStorage, ts.length > 0 {
-            let location = max(0, min(range.location, ts.length - 1))
-            if let tagged = ts.attribute(.screenplayElement, at: location, effectiveRange: nil) as? String,
+            let text = tv.string as NSString
+            let location: Int?
+            if range.location < ts.length {
+                location = max(0, range.location)
+            } else if ts.length > 0, text.character(at: ts.length - 1) != 10 {
+                location = ts.length - 1
+            } else {
+                location = nil
+            }
+
+            if let location,
+               let tagged = ts.attribute(.screenplayElement, at: location, effectiveRange: nil) as? String,
                let element = ScreenplayElement(rawValue: tagged) {
                 return element
             }
         }
 
+        if let tagged = tv.typingAttributes[.screenplayElement] as? String,
+           let element = ScreenplayElement(rawValue: tagged) {
+            return element
+        }
+
         return activeScreenplayElement
+    }
+
+    func nextScreenplayElementOnReturn(in tv: NSTextView) -> ScreenplayElement {
+        let current = detectedScreenplayElement(in: tv)
+        let paragraph = currentParagraphText(in: tv, range: currentParagraphRange(in: tv))
+
+        if paragraph.isEmpty {
+            switch current {
+            case .character, .parenthetical, .dialogue:
+                return .action
+            default:
+                break
+            }
+        }
+        return current.nextOnReturn
+    }
+
+    func focusScreenplayLocation(_ location: Int) {
+        guard let textView else { return }
+        let safeLocation = max(0, min(location, (textView.string as NSString).length))
+        textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: safeLocation, length: 0))
+        textView.window?.makeFirstResponder(textView)
+        updateFormattingState(from: textView)
+    }
+
+    func focusEditor() {
+        guard let textView else { return }
+        textView.window?.makeFirstResponder(textView)
+        textView.scrollRangeToVisible(textView.selectedRange())
     }
 
     func autoFormatScreenplay(in tv: NSTextView) -> ScreenplayElement {
@@ -190,6 +231,52 @@ final class FormattingBridge: ObservableObject {
         applyScreenplayElement(inferredElement, to: tv, notifyTextChange: false)
         updateFormattingState(from: tv)
         return inferredElement
+    }
+
+    func autoFormatEntireScreenplay() {
+        guard let tv = textView, let textStorage = tv.textStorage else { return }
+
+        let originalSelection = tv.selectedRange()
+        var previousElement: ScreenplayElement?
+        var location = 0
+
+        while location < (tv.string as NSString).length {
+            let source = tv.string as NSString
+            let paragraphRange = source.paragraphRange(for: NSRange(location: location, length: 0))
+            let paragraph = source.substring(with: paragraphRange)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let taggedElement = textStorage.attribute(
+                .screenplayElement,
+                at: paragraphRange.location,
+                effectiveRange: nil
+            ) as? String
+            let currentElement = taggedElement.flatMap(ScreenplayElement.init(rawValue:)) ?? .action
+            let inferredElement = inferScreenplayElement(
+                for: paragraph,
+                currentElement: currentElement,
+                previousElement: previousElement
+            )
+
+            normalizeScreenplayParagraph(in: tv, range: paragraphRange, for: inferredElement)
+            let refreshedRange = (tv.string as NSString).paragraphRange(
+                for: NSRange(location: min(location, (tv.string as NSString).length), length: 0)
+            )
+            textStorage.addAttributes(screenplayAttributes(for: inferredElement), range: refreshedRange)
+
+            if !paragraph.isEmpty {
+                previousElement = inferredElement
+            }
+            let nextLocation = NSMaxRange(refreshedRange)
+            guard nextLocation > location else { break }
+            location = nextLocation
+        }
+
+        let finalLength = (tv.string as NSString).length
+        tv.setSelectedRange(NSRange(location: min(originalSelection.location, finalLength), length: 0))
+        let activeElement = detectedScreenplayElement(in: tv)
+        configureTypingAttributes(for: activeElement, in: tv)
+        updateFormattingState(from: tv)
+        tv.didChangeText()
     }
 
     func applySuggestion(_ suggestion: ScreenplaySuggestion) {
@@ -250,7 +337,9 @@ final class FormattingBridge: ObservableObject {
         return [
             .font: style.font,
             .paragraphStyle: style.paragraphStyle,
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: MongrelAppearancePreferences.shared.mode == .standard
+                ? NSColor(calibratedWhite: 0.08, alpha: 1)
+                : NSColor(MongrelAppearancePreferences.shared.text),
             .screenplayElement: element.rawValue
         ]
     }
@@ -395,17 +484,17 @@ final class FormattingBridge: ObservableObject {
             .uppercased()
 
         let sceneHeadingPrefixes = ["INT.", "EXT.", "INT/EXT.", "INT./EXT.", "EXT./INT.", "I/E.", "EST."]
-        if sceneHeadingPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+        if sceneHeadingPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) {
             return .sceneHeading
         }
 
         let titleCardPrefixes = ["TITLE CARD", "SUPER", "SUPER:", "TITLE:", "ON BLACK", "TEXT ON SCREEN"]
-        if titleCardPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+        if titleCardPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) {
             return .titleCard
         }
 
         let insertPrefixes = ["INSERT", "INSERT -", "ON SCREEN", "PHONE SCREEN", "TEXT MESSAGE", "NEWSFEED"]
-        if insertPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+        if insertPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) {
             return .insert
         }
 
@@ -413,12 +502,12 @@ final class FormattingBridge: ObservableObject {
             "MEANWHILE", "MOMENTS LATER", "LATER", "CONTINUOUS", "FLASHBACK", "FLASHFORWARD",
             "BACK TO PRESENT", "BACK TO SCENE", "DREAM SEQUENCE", "INTERCUT"
         ]
-        if timeJumpPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+        if timeJumpPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) {
             return .timeJump
         }
 
         let shotPrefixes = ["SHOT", "ANGLE ON", "CLOSE ON", "WIDE ON", "POV", "POV SHOT", "TRACKING SHOT", "INSERT SHOT"]
-        if shotPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+        if shotPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) {
             return .shot
         }
 
@@ -426,22 +515,39 @@ final class FormattingBridge: ObservableObject {
             "CUT TO", "DISSOLVE TO", "MATCH CUT TO", "SMASH CUT TO", "FADE IN", "FADE OUT",
             "BACK TO", "WIPE TO", "JUMP CUT TO"
         ]
-        if transitionPrefixes.contains(where: { normalized.hasPrefix($0) }) || normalized.hasSuffix(" TO:") {
+        if transitionPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) || normalized.hasSuffix(" TO:") {
             return .transition
         }
 
         return .action
     }
 
+    private func matchesPrefix(_ prefix: String, in value: String) -> Bool {
+        guard value.hasPrefix(prefix) else { return false }
+        guard value.count > prefix.count else { return true }
+        let boundary = value.index(value.startIndex, offsetBy: prefix.count)
+        return value[boundary].isWhitespace || "-:.(".contains(value[boundary])
+    }
+
     private func looksLikeCharacterCue(_ paragraph: String) -> Bool {
-        let normalized = paragraph
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
+        let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.uppercased()
 
         guard !normalized.isEmpty, normalized.count <= 32 else { return false }
-        guard normalized == paragraph.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() else { return false }
+        // Ordinary short action lines must not be mistaken for character cues.
+        guard trimmed == normalized else { return false }
         guard !normalized.contains("INT.") && !normalized.contains("EXT.") else { return false }
         guard !normalized.contains(":") else { return false }
+        let words = normalized.split(whereSeparator: \.isWhitespace)
+        guard words.count <= 4 else { return false }
+
+        if normalized.hasSuffix("!") || normalized.hasSuffix("?") {
+            return false
+        }
+        if normalized.hasSuffix("."),
+           !["DR.", "MR.", "MRS.", "MS.", "ST."].contains(where: { normalized.hasPrefix($0) }) {
+            return false
+        }
         return normalized.rangeOfCharacter(from: CharacterSet.letters) != nil
     }
 
@@ -490,7 +596,7 @@ final class FormattingBridge: ObservableObject {
         textStorage.replaceCharacters(in: range, with: replacement)
         textStorage.endEditing()
 
-        let lengthDelta = replacement.count - oldLength
+        let lengthDelta = (replacement as NSString).length - oldLength
         let newLocation = min(range.location + selectionOffset + max(0, lengthDelta), (tv.string as NSString).length)
         tv.setSelectedRange(NSRange(location: newLocation, length: 0))
     }
@@ -581,7 +687,18 @@ final class FormattingBridge: ObservableObject {
                 ScreenplaySuggestion(label: "(O.S.)", text: "(O.S.)", element: .parenthetical, behavior: .replaceParagraph)
             ]
         case .character:
-            return [
+            let recentCharacters = existingCharacterNames(in: tv)
+                .filter { $0 != trimmed }
+                .prefix(5)
+                .map {
+                    ScreenplaySuggestion(
+                        label: $0,
+                        text: $0,
+                        element: .character,
+                        behavior: .replaceParagraph
+                    )
+                }
+            return recentCharacters + [
                 ScreenplaySuggestion(label: "O.S.", text: "\(trimmed.isEmpty ? "CHARACTER" : trimmed) (O.S.)", element: .character, behavior: .replaceParagraph),
                 ScreenplaySuggestion(label: "V.O.", text: "\(trimmed.isEmpty ? "CHARACTER" : trimmed) (V.O.)", element: .character, behavior: .replaceParagraph)
             ]
@@ -596,6 +713,27 @@ final class FormattingBridge: ObservableObject {
             let key = suggestion.id
             return seen.insert(key).inserted
         }
+    }
+
+    private func existingCharacterNames(in tv: NSTextView) -> [String] {
+        let text = tv.string as NSString
+        guard text.length > 0 else { return [] }
+
+        var names: [String] = []
+        var location = 0
+        while location < text.length {
+            let range = text.paragraphRange(for: NSRange(location: location, length: 0))
+            let paragraph = text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
+            let tagged = tv.textStorage?.attribute(.screenplayElement, at: range.location, effectiveRange: nil) as? String
+            if !paragraph.isEmpty,
+               tagged == ScreenplayElement.character.rawValue || looksLikeCharacterCue(paragraph) {
+                names.append(paragraph.uppercased())
+            }
+            location = NSMaxRange(range)
+        }
+
+        var seen = Set<String>()
+        return names.reversed().filter { seen.insert($0).inserted }
     }
 
     private func screenplayFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {

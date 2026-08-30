@@ -1,4 +1,5 @@
 import SwiftUI
+import SharedFoundation
 
 @main
 struct MongrelWordProcessorApp: App {
@@ -8,12 +9,20 @@ struct MongrelWordProcessorApp: App {
         WindowGroup {
             WordProcessorContentView()
                 .environmentObject(session)
+                .mongrelAppearance()
                 .frame(minWidth: 980, minHeight: 680)
+                .onOpenURL { url in
+                    session.openExternalDocument(at: url)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 860)
         .commands {
             WordProcessorCommands(session: session)
+        }
+
+        Settings {
+            MongrelAppearanceSettingsView()
         }
     }
 }
@@ -27,6 +36,11 @@ private struct WordProcessorCommands: Commands {
                 session.newDocument()
             }
             .keyboardShortcut("n", modifiers: .command)
+
+            Button("New Screenplay") {
+                session.newScreenplay()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
 
             Button("Open...") {
                 session.openDocument()
@@ -55,6 +69,57 @@ private struct WordProcessorCommands: Commands {
                 session.saveDocumentAs()
             }
             .keyboardShortcut("S", modifiers: [.command, .shift])
+
+            Button("Save a Copy...") {
+                session.saveDocumentCopyAs()
+            }
+
+            Divider()
+
+            Button("Clear Recent Documents") {
+                session.clearRecentDocuments()
+            }
+            .disabled(session.recentDocuments.isEmpty)
+        }
+
+        CommandGroup(replacing: .printItem) {
+            Button("Print...") {
+                session.printDocument()
+            }
+            .keyboardShortcut("p", modifiers: .command)
+        }
+
+        CommandMenu("Writing") {
+            Button("Auto Format Screenplay") {
+                session.formattingBridge.autoFormatEntireScreenplay()
+            }
+            .disabled(session.authoringMode != .screenplay)
+
+            Divider()
+
+            Button(session.typewriterMode ? "Disable Typewriter Scrolling" : "Enable Typewriter Scrolling") {
+                session.typewriterMode.toggle()
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+
+            Divider()
+
+            Button("Zoom In") {
+                session.adjustEditorZoom(by: 0.1)
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(session.editorZoom >= 2)
+
+            Button("Zoom Out") {
+                session.adjustEditorZoom(by: -0.1)
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(session.editorZoom <= 0.6)
+
+            Button("Actual Size") {
+                session.resetEditorZoom()
+            }
+            .keyboardShortcut("0", modifiers: .command)
         }
 
         CommandMenu("Export") {

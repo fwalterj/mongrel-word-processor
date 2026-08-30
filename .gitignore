@@ -11,6 +11,7 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 *.xcuserstate
+*.profraw
 
 # Swift Package Manager
 .build/
