@@ -129,10 +129,12 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
-        scrollView.allowsMagnification = true
+        // The SwiftUI canvas owns zoom so its allocated size always matches
+        // AppKit's magnification. Independent pinch zoom would desynchronize them.
+        scrollView.allowsMagnification = false
         scrollView.minMagnification = 0.6
         scrollView.maxMagnification = 2
-        scrollView.magnification = editorZoom
+        scrollView.magnification = 1
         scrollView.drawsBackground = false
         scrollView.documentView = textView
 
@@ -148,6 +150,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.applyCompanionSpellings(to: textView, fullDocument: true)
         bridge.updateFormattingState(from: textView)
         context.coordinator.updateScreenplayPagination(for: textView)
+        context.coordinator.updateMagnification(editorZoom, in: scrollView)
         return scrollView
     }
 
@@ -201,7 +204,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         if abs(context.coordinator.lastZoom - editorZoom) > 0.001 {
             context.coordinator.lastZoom = editorZoom
-            nsView.animator().magnification = editorZoom
+            context.coordinator.updateMagnification(editorZoom, in: nsView)
         }
 
         if context.coordinator.lastTypewriterMode != typewriterMode {
@@ -446,7 +449,8 @@ struct TextKit2EditorView: NSViewRepresentable {
             let contentHeight = measuredScreenplayContentHeight(in: textView)
             let requiredPages = ScreenplayPageLayout.pageCount(forLaidOutContentHeight: contentHeight)
             let requiredHeight = CGFloat(requiredPages) * ScreenplayPageLayout.pageSize.height
-            let visibleHeight = textView.enclosingScrollView?.contentSize.height ?? ScreenplayPageLayout.pageSize.height
+            let visibleHeight = textView.enclosingScrollView?.documentVisibleRect.height
+                ?? ScreenplayPageLayout.pageSize.height
             let finalHeight = max(requiredHeight, visibleHeight)
 
             let requiredSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: finalHeight)
@@ -463,6 +467,21 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
 
             parent.onPaginationChange(requiredPages)
+        }
+
+        func updateMagnification(_ magnification: CGFloat, in scrollView: NSScrollView) {
+            let previousOrigin = scrollView.documentVisibleRect.origin
+            scrollView.magnification = magnification
+
+            // Width is allocated by SwiftUI at the same scale, so x must stay at
+            // the document origin. Retain vertical reading position in document units.
+            let visibleHeight = scrollView.documentVisibleRect.height
+            let documentHeight = scrollView.documentView?.bounds.height ?? visibleHeight
+            let maximumY = max(0, documentHeight - visibleHeight)
+            scrollView.contentView.setBoundsOrigin(
+                NSPoint(x: 0, y: min(max(0, previousOrigin.y), maximumY))
+            )
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         func centerSelection(in textView: NSTextView) {

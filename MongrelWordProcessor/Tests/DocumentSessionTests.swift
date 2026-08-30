@@ -56,6 +56,13 @@ final class DocumentSessionTests: XCTestCase {
 
         XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "Second version")
         XCTAssertFalse(session.hasUnsavedChanges)
+
+        let reopened = makeSession()
+        XCTAssertTrue(reopened.openDocument(at: destination))
+        XCTAssertEqual(
+            reopened.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            NSColor.labelColor
+        )
     }
 
     @MainActor
@@ -213,6 +220,7 @@ final class DocumentSessionTests: XCTestCase {
     func testWritingPreferencesClampAndPersist() {
         let session = makeSession()
         session.setEditorZoom(4)
+        session.screenplayViewStyle = .clean
         session.typewriterMode = true
 
         XCTAssertEqual(session.editorZoom, 2)
@@ -220,6 +228,7 @@ final class DocumentSessionTests: XCTestCase {
 
         let restored = makeSession()
         XCTAssertEqual(restored.editorZoom, 2)
+        XCTAssertEqual(restored.screenplayViewStyle, .clean)
         XCTAssertTrue(restored.typewriterMode)
 
         restored.setEditorZoom(0.1)
@@ -242,6 +251,18 @@ final class DocumentSessionTests: XCTestCase {
 
         XCTAssertEqual(reports, [2])
         withExtendedLifetime(subscription) {}
+    }
+
+    @MainActor
+    func testManualZoomLeavesAutomaticScreenplayView() {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        session.screenplayViewStyle = .fitWidth
+
+        session.adjustEditorZoom(by: 0.1)
+
+        XCTAssertEqual(session.screenplayViewStyle, .page)
+        XCTAssertEqual(session.editorZoom, 1.1, accuracy: 0.001)
     }
 
     private func screenplayElement(in text: NSAttributedString, at location: Int) -> ScreenplayElement? {

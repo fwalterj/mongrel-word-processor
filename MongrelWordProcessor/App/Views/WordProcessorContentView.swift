@@ -42,8 +42,6 @@ struct WordProcessorContentView: View {
             .padding(.top, 34)
             .padding(.bottom, 12)
 
-            Divider().overlay(DesignTokens.borderRim)
-
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Recent Documents")
@@ -93,10 +91,6 @@ struct WordProcessorContentView: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(DesignTokens.glassCard.opacity(0.8))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .strokeBorder(DesignTokens.borderRim, lineWidth: 0.5)
-                                    )
                             )
                         }
                         .buttonStyle(.plain)
@@ -127,7 +121,7 @@ struct WordProcessorContentView: View {
                 statLine("State", value: session.documentStatusLabel)
             }
             .padding(12)
-            .glassChromeBackground(style: .card, cornerRadius: 0)
+            .background(DesignTokens.glassBase.opacity(0.42))
         }
         .frame(minWidth: 240, idealWidth: 260, maxWidth: 300)
         .glassChromeBackground(style: .deep, cornerRadius: 0)
@@ -188,14 +182,11 @@ struct WordProcessorContentView: View {
             if !isFocusMode {
                 topChrome
                     .fixedSize(horizontal: false, vertical: true)
-                Divider().overlay(DesignTokens.borderRim)
                 formattingToolbar
                     .fixedSize(horizontal: false, vertical: true)
-                Divider().overlay(DesignTokens.borderRim)
             }
             editorArea
             if !isFocusMode {
-                Divider().overlay(DesignTokens.borderRim)
                 statusBar
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -222,11 +213,7 @@ struct WordProcessorContentView: View {
                 .padding(.vertical, 7)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(DesignTokens.glassCard)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(DesignTokens.borderRim, lineWidth: 1)
+                        .fill(DesignTokens.glassCard.opacity(0.7))
                 )
 
             if session.hasUnsavedChanges {
@@ -350,9 +337,28 @@ struct WordProcessorContentView: View {
                 .controlSize(.small)
                 .foregroundStyle(DesignTokens.chromeText.opacity(0.85))
             } else if session.authoringMode == .screenplay {
-                Text("Letter layout")
+                Menu {
+                    ForEach(ScreenplayViewStyle.allCases) { style in
+                        Button {
+                            session.screenplayViewStyle = style
+                        } label: {
+                            if session.screenplayViewStyle == style {
+                                Label(style.title, systemImage: "checkmark")
+                            } else {
+                                Text(style.title)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(
+                        session.screenplayViewStyle.title,
+                        systemImage: session.screenplayViewStyle.systemImage
+                    )
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(DesignTokens.chromeText.opacity(0.68))
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.78))
+                }
+                .menuStyle(.borderlessButton)
+                .help("Choose paged, fit-width, or clean document presentation")
 
                 Menu {
                     ForEach(ScreenplayElement.allCases, id: \.rawValue) { element in
@@ -429,8 +435,9 @@ struct WordProcessorContentView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .glassChromeBackground(style: .elevated, cornerRadius: 0)
+        .padding(.top, 9)
+        .padding(.bottom, 7)
+        .background(DesignTokens.glassBase.opacity(0.82))
     }
 
     private var formattingToolbar: some View {
@@ -451,10 +458,11 @@ struct WordProcessorContentView: View {
             .disabled(!session.hasRestorableLastDocument)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.top, 5)
+        .padding(.bottom, 8)
         .font(.system(size: 12, weight: .semibold, design: .rounded))
         .foregroundStyle(DesignTokens.chromeText)
-        .glassChromeBackground(style: .card, cornerRadius: 0)
+        .background(DesignTokens.glassBase.opacity(0.58))
     }
 
     private var proseAndCodeToolbar: some View {
@@ -542,10 +550,6 @@ struct WordProcessorContentView: View {
                                 Capsule()
                                     .fill(DesignTokens.glassHotSpot.opacity(0.28))
                             )
-                            .overlay(
-                                Capsule()
-                                    .stroke(DesignTokens.borderRim, lineWidth: 0.8)
-                            )
                     }
                     .buttonStyle(.plain)
                 }
@@ -556,24 +560,29 @@ struct WordProcessorContentView: View {
     private var editorArea: some View {
         VStack(alignment: .leading, spacing: 0) {
             if session.authoringMode == .screenplay {
-                ScrollView([.horizontal, .vertical]) {
-                    screenplayEditorCanvas
-                        .frame(
-                            minWidth: ScreenplayPageLayout.pageSize.width + 56,
-                            minHeight: ScreenplayPageLayout.pageSize.height + 36
+                GeometryReader { geometry in
+                    let scale = screenplayCanvasScale(availableWidth: geometry.size.width)
+                    ScrollView([.horizontal, .vertical]) {
+                        screenplayEditorCanvas(
+                            scale: scale,
+                            availableWidth: geometry.size.width,
+                            availableHeight: geometry.size.height
                         )
+                    }
+                    .scrollIndicators(.visible)
                 }
             } else {
-                coreEditor
+                coreEditor(editorZoom: session.editorZoom)
                     .background(selectedEditorBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(DesignTokens.borderRim, lineWidth: 1)
+                            .stroke(DesignTokens.borderRim.opacity(0.45), lineWidth: 0.6)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
-        .padding(14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
             LinearGradient(
                 colors: [DesignTokens.glassDeep, DesignTokens.glassBase],
@@ -597,7 +606,7 @@ struct WordProcessorContentView: View {
         "\(session.screenplaySceneCount) scene\(session.screenplaySceneCount == 1 ? "" : "s")"
     }
 
-    private var coreEditor: some View {
+    private func coreEditor(editorZoom: CGFloat) -> some View {
         TextKit2EditorView(
             attributedText: $session.attributedText,
             onEdit: {
@@ -618,44 +627,75 @@ struct WordProcessorContentView: View {
             codeUseTabs: session.codeUseTabs,
             codeTabWidth: session.codeTabWidth,
             codeLineWrap: session.codeLineWrap,
-            editorZoom: session.editorZoom,
+            editorZoom: editorZoom,
             typewriterMode: session.typewriterMode
         )
     }
 
-    private var screenplayEditorCanvas: some View {
-        HStack {
-            Spacer(minLength: 28)
-            VStack(spacing: 0) {
-                HStack {
-                    Text("US Letter")
-                    Spacer()
-                    Text(screenplayPageSummary)
-                }
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(screenplayPaperForeground.opacity(0.58))
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
+    private func screenplayEditorCanvas(
+        scale: CGFloat,
+        availableWidth: CGFloat,
+        availableHeight: CGFloat
+    ) -> some View {
+        let scaledWidth = ScreenplayPageLayout.pageSize.width * scale
+        let scaledHeight = ScreenplayPageLayout.pageSize.height * scale
+        let style = session.screenplayViewStyle
+        let cornerRadius: CGFloat = style.showsPaperChrome ? 14 : 5
+        let horizontalMargin: CGFloat = style.showsPaperChrome ? 28 : 12
 
-                coreEditor
-                    .frame(width: ScreenplayPageLayout.pageSize.width)
-                    .frame(height: ScreenplayPageLayout.pageSize.height)
-                    .background(selectedEditorBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .frame(width: ScreenplayPageLayout.pageSize.width)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(screenplayPaperBackground)
-                    .shadow(color: Color.black.opacity(0.08), radius: 28, x: 0, y: 18)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(screenplayPaperForeground.opacity(0.18), lineWidth: 1)
-            )
-            Spacer(minLength: 28)
+        return HStack(spacing: 0) {
+            Spacer(minLength: horizontalMargin)
+            coreEditor(editorZoom: scale)
+                .frame(width: scaledWidth, height: scaledHeight)
+                .background(selectedEditorBackground)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(alignment: .top) {
+                    if style.showsPaperChrome {
+                        HStack {
+                            Text("US Letter")
+                            Spacer()
+                            Text(screenplayPageSummary)
+                        }
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(screenplayPaperForeground.opacity(0.58))
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                        .allowsHitTesting(false)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(screenplayPaperBackground)
+                        .shadow(
+                            color: style.showsPaperChrome ? Color.black.opacity(0.10) : .clear,
+                            radius: style.showsPaperChrome ? 22 : 0,
+                            x: 0,
+                            y: style.showsPaperChrome ? 12 : 0
+                        )
+                )
+                .overlay {
+                    if style.showsPaperChrome {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(screenplayPaperForeground.opacity(0.12), lineWidth: 0.6)
+                    }
+                }
+            Spacer(minLength: horizontalMargin)
         }
-        .padding(.vertical, 18)
+        .frame(
+            minWidth: max(availableWidth, scaledWidth + (horizontalMargin * 2)),
+            minHeight: max(availableHeight, scaledHeight + 20),
+            alignment: .top
+        )
+        .padding(.vertical, style.showsPaperChrome ? 14 : 6)
+    }
+
+    private func screenplayCanvasScale(availableWidth: CGFloat) -> CGFloat {
+        guard session.screenplayViewStyle.usesAutomaticZoom else {
+            return session.editorZoom
+        }
+        let margin: CGFloat = isFocusMode ? 88 : 64
+        let proposed = (availableWidth - margin) / ScreenplayPageLayout.pageSize.width
+        return min(max(proposed, 0.6), 1.6)
     }
 
     private var statusBar: some View {
@@ -688,8 +728,8 @@ struct WordProcessorContentView: View {
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .foregroundStyle(DesignTokens.chromeText.opacity(0.62))
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .glassChromeBackground(style: .deep, cornerRadius: 0)
+        .padding(.vertical, 7)
+        .background(DesignTokens.glassDeep.opacity(0.84))
     }
 
     private var writingControls: some View {
@@ -703,31 +743,44 @@ struct WordProcessorContentView: View {
             .buttonStyle(.plain)
             .help("Keep the current line near the center")
 
-            Button {
-                session.adjustEditorZoom(by: -0.1)
-            } label: {
-                Image(systemName: "minus.magnifyingglass")
-            }
-            .buttonStyle(.plain)
-            .disabled(session.editorZoom <= 0.6)
+            if session.authoringMode == .screenplay,
+               session.screenplayViewStyle.usesAutomaticZoom {
+                Button {
+                    session.screenplayViewStyle = .page
+                    session.resetEditorZoom()
+                } label: {
+                    Label(session.screenplayViewStyle.title, systemImage: "arrow.left.and.right")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                }
+                .buttonStyle(.plain)
+                .help("Switch to manual page zoom at actual size")
+            } else {
+                Button {
+                    session.adjustEditorZoom(by: -0.1)
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .buttonStyle(.plain)
+                .disabled(session.editorZoom <= 0.6)
 
-            Button {
-                session.resetEditorZoom()
-            } label: {
-                Text("\(session.editorZoomPercentage)%")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .frame(minWidth: 34)
-            }
-            .buttonStyle(.plain)
-            .help("Reset zoom")
+                Button {
+                    session.resetEditorZoom()
+                } label: {
+                    Text("\(session.editorZoomPercentage)%")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .frame(minWidth: 34)
+                }
+                .buttonStyle(.plain)
+                .help("Reset zoom")
 
-            Button {
-                session.adjustEditorZoom(by: 0.1)
-            } label: {
-                Image(systemName: "plus.magnifyingglass")
+                Button {
+                    session.adjustEditorZoom(by: 0.1)
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .buttonStyle(.plain)
+                .disabled(session.editorZoom >= 2)
             }
-            .buttonStyle(.plain)
-            .disabled(session.editorZoom >= 2)
         }
     }
 
@@ -816,10 +869,13 @@ struct WordProcessorContentView: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(isActive ? DesignTokens.accent.opacity(0.18) : DesignTokens.glassElevated)
+                .fill(isActive ? DesignTokens.accent.opacity(0.18) : DesignTokens.glassElevated.opacity(0.58))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(isActive ? DesignTokens.accent.opacity(0.55) : DesignTokens.borderRim, lineWidth: 0.5)
+                        .strokeBorder(
+                            isActive ? DesignTokens.accent.opacity(0.55) : .clear,
+                            lineWidth: 0.5
+                        )
                 )
         )
     }
@@ -834,11 +890,7 @@ struct WordProcessorContentView: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(DesignTokens.glassElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(DesignTokens.borderRim, lineWidth: 0.5)
-                )
+                .fill(DesignTokens.glassElevated.opacity(0.58))
         )
     }
 

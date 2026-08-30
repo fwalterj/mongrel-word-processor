@@ -83,6 +83,31 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(background.blueComponent, 0.8)
     }
 
+    func testMagnifiedCanvasKeepsTheDocumentWidthVisible() {
+        let harness = makeHarness()
+        let scale: CGFloat = 1.4
+        let scrollView = NSScrollView(frame: NSRect(
+            origin: .zero,
+            size: NSSize(
+                width: ScreenplayPageLayout.pageSize.width * scale,
+                height: ScreenplayPageLayout.pageSize.height * scale
+            )
+        ))
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.documentView = harness.textView
+        harness.textView.setFrameSize(ScreenplayPageLayout.pageSize)
+
+        harness.coordinator.updateMagnification(scale, in: scrollView)
+
+        XCTAssertEqual(scrollView.documentVisibleRect.minX, 0, accuracy: 0.001)
+        XCTAssertEqual(
+            scrollView.documentVisibleRect.width,
+            ScreenplayPageLayout.pageSize.width,
+            accuracy: 1
+        )
+    }
+
     private func makeHarness(
         onElementChange: @escaping (ScreenplayElement) -> Void = { _ in }
     ) -> (

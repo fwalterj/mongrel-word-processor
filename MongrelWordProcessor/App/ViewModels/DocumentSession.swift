@@ -104,6 +104,38 @@ enum AuthoringMode: String, CaseIterable {
     }
 }
 
+enum ScreenplayViewStyle: String, CaseIterable, Identifiable {
+    case page
+    case fitWidth
+    case clean
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .page: return "Page"
+        case .fitWidth: return "Fit Width"
+        case .clean: return "Clean"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .page: return "doc"
+        case .fitWidth: return "arrow.left.and.right"
+        case .clean: return "rectangle.inset.filled"
+        }
+    }
+
+    var usesAutomaticZoom: Bool {
+        self != .page
+    }
+
+    var showsPaperChrome: Bool {
+        self != .clean
+    }
+}
+
 enum ScreenplayElement: String, CaseIterable {
     case sceneHeading
     case action
@@ -255,6 +287,12 @@ final class DocumentSession: ObservableObject {
     @Published var codeLineWrap: Bool = false
     @Published var screenplayElement: ScreenplayElement = .action
     @Published private(set) var editorZoom: CGFloat = 1
+    @Published var screenplayViewStyle: ScreenplayViewStyle = .fitWidth {
+        didSet {
+            guard screenplayViewStyle != oldValue else { return }
+            defaults.set(screenplayViewStyle.rawValue, forKey: screenplayViewStyleKey)
+        }
+    }
     @Published var typewriterMode: Bool = false {
         didSet {
             guard typewriterMode != oldValue else { return }
@@ -300,6 +338,7 @@ final class DocumentSession: ObservableObject {
     private let defaults: UserDefaults
     private let recentDocsKey = "wordprocessor.recentDocs"
     private let editorZoomKey = "wordprocessor.editorZoom"
+    private let screenplayViewStyleKey = "wordprocessor.screenplayViewStyle"
     private let typewriterModeKey = "wordprocessor.typewriterMode"
 
     init(
@@ -311,6 +350,9 @@ final class DocumentSession: ObservableObject {
         self.companionLexicon = companionLexicon
         let storedZoom = defaults.double(forKey: editorZoomKey)
         self.editorZoom = storedZoom == 0 ? 1 : min(max(CGFloat(storedZoom), 0.6), 2)
+        self.screenplayViewStyle = ScreenplayViewStyle(
+            rawValue: defaults.string(forKey: screenplayViewStyleKey) ?? ""
+        ) ?? .fitWidth
         self.typewriterMode = defaults.bool(forKey: typewriterModeKey)
         hasRestorableLastDocument = persistenceStore.hasLastDocumentBookmark
         auditLogger.info("session_initialized", metadata: ["hasRestorableLastDocument": hasRestorableLastDocument])
@@ -379,10 +421,16 @@ final class DocumentSession: ObservableObject {
     }
 
     func adjustEditorZoom(by delta: CGFloat) {
+        if authoringMode == .screenplay {
+            screenplayViewStyle = .page
+        }
         setEditorZoom(editorZoom + delta)
     }
 
     func resetEditorZoom() {
+        if authoringMode == .screenplay {
+            screenplayViewStyle = .page
+        }
         setEditorZoom(1)
     }
 
@@ -671,7 +719,17 @@ final class DocumentSession: ObservableObject {
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
-        return (NSAttributedString(string: text), .plainText, .prose)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.35
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 14),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph
+            ]
+        )
+        return (attributed, .plainText, .prose)
     }
 
     @discardableResult
