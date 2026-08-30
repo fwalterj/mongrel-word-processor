@@ -107,6 +107,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         let textView = ScreenplayTextView(frame: .zero, textContainer: textContainer)
         textView.isRichText = true
+        textView.usesFontPanel = true
         textView.allowsUndo = true
         textView.usesFindBar = true
         textView.isAutomaticQuoteSubstitutionEnabled = true

@@ -20,8 +20,13 @@
   <string>$(CURRENT_PROJECT_VERSION)</string>
   <key>LSMinimumSystemVersion</key>
   <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
-  <key>NSPrincipalClass</key>
-  <string>NSApplication</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -37,8 +42,8 @@
 			</array>
 		</dict>
 		<dict>
-      <key>CFBundleTypeName</key>
-      <string>Rich Text Document</string>
+			<key>CFBundleTypeName</key>
+			<string>Rich Text Document</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
@@ -46,10 +51,22 @@
       <key>LSItemContentTypes</key>
 	      <array>
 	        <string>public.rtf</string>
-	        <string>public.plain-text</string>
-	      </array>
-	    </dict>
-	  </array>
+				<string>public.plain-text</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Microsoft Word Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.openxmlformats.wordprocessingml.document</string>
+			</array>
+		</dict>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

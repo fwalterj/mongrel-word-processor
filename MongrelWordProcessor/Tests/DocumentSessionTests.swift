@@ -91,8 +91,37 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testWordDocumentRoundTripPreservesTextAndBasicFormatting() throws {
+        let source = makeSession()
+        let destination = temporaryDirectory.appendingPathComponent("Interchange.docx")
+        let text = NSMutableAttributedString(string: "Word-compatible draft")
+        text.addAttribute(
+            .font,
+            value: NSFont.boldSystemFont(ofSize: 16),
+            range: NSRange(location: 0, length: 4)
+        )
+        source.attributedText = text
+        source.markDirty()
+
+        XCTAssertTrue(source.saveDocument(to: destination, type: .wordDocument))
+        XCTAssertGreaterThan(try Data(contentsOf: destination).count, 0)
+
+        let reopened = makeSession()
+        XCTAssertTrue(reopened.openDocument(at: destination))
+        XCTAssertEqual(
+            reopened.attributedText.string.trimmingCharacters(in: .newlines),
+            "Word-compatible draft"
+        )
+        XCTAssertTrue(
+            try XCTUnwrap(reopened.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+                .fontDescriptor.symbolicTraits.contains(.bold)
+        )
+    }
+
+    @MainActor
     func testNewDocumentResetsContentAndMetrics() {
         let session = makeSession()
+        session.newScreenplay()
 
         session.newDocument()
 
@@ -102,6 +131,8 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(session.wordCount, 0)
         XCTAssertEqual(session.charCount, 0)
         XCTAssertEqual(session.screenplaySceneCount, 0)
+        XCTAssertEqual(session.authoringMode, .prose)
+        XCTAssertEqual(session.documentInsights, .empty)
     }
 
     @MainActor
@@ -118,10 +149,18 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertFalse(session.hasUnsavedChanges)
     }
 
+    @MainActor
     func testOpenPanelSupportsNativeScreenplaysAndCommonTextFormats() {
+        let openTypeIdentifiers = Set(DocumentSession.openableDocumentTypes.map(\.identifier))
+
         XCTAssertEqual(
-            Set(DocumentSession.openableDocumentTypes.map(\.identifier)),
-            Set([UTType.mongrelScreenplay.identifier, UTType.rtf.identifier, UTType.plainText.identifier])
+            openTypeIdentifiers,
+            Set([
+                UTType.mongrelScreenplay.identifier,
+                UTType.rtf.identifier,
+                UTType.wordDocument.identifier,
+                UTType.plainText.identifier
+            ])
         )
     }
 
@@ -156,6 +195,37 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(session.screenplayScenes.map(\.heading), ["INT. KITCHEN - MORNING", "EXT. ROAD - NIGHT"])
         XCTAssertEqual(session.screenplayScenes.map(\.location), [0, 41])
         XCTAssertGreaterThan(session.charCount, 0)
+    }
+
+    @MainActor
+    func testDocumentInsightsMeasureScreenplayRhythmAndCharacters() {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        let script = NSMutableAttributedString(
+            string: "INT. LAB - NIGHT\nA monitor blinks.\nMARA\nWe have a signal.\nEXT. ROOF - DAWN\nWind rises.\nMARA\nIt followed us.\n"
+        )
+        let source = script.string as NSString
+        var cueSearchRange = NSRange(location: 0, length: source.length)
+        while cueSearchRange.length > 0 {
+            let range = source.range(of: "MARA\n", options: [], range: cueSearchRange)
+            guard range.location != NSNotFound else { break }
+            script.addAttribute(.screenplayElement, value: ScreenplayElement.character.rawValue, range: range)
+            let nextLocation = NSMaxRange(range)
+            cueSearchRange = NSRange(location: nextLocation, length: source.length - nextLocation)
+        }
+        let dialogueOne = source.range(of: "We have a signal.")
+        let dialogueTwo = source.range(of: "It followed us.")
+        script.addAttribute(.screenplayElement, value: ScreenplayElement.dialogue.rawValue, range: dialogueOne)
+        script.addAttribute(.screenplayElement, value: ScreenplayElement.dialogue.rawValue, range: dialogueTwo)
+        session.attributedText = script
+        session.markDirty()
+
+        XCTAssertEqual(session.screenplaySceneCount, 2)
+        XCTAssertEqual(session.documentInsights.scenes.count, 2)
+        XCTAssertGreaterThan(session.documentInsights.dialogueShare, 0)
+        XCTAssertEqual(session.documentInsights.characters.first?.name, "MARA")
+        XCTAssertEqual(session.documentInsights.characters.first?.cueCount, 2)
+        XCTAssertGreaterThan(session.documentInsights.paragraphWordCounts.count, 0)
     }
 
     @MainActor

@@ -30,3 +30,12 @@ DerivedData/
 UsingTextKit2ToInteractWithText/
 mongrel-notes/
 userChrome-glass.css
+
+# Local upstream source checkouts used for integration research
+/hunspell-master/
+/hunspell-master.zip
+/languagetool-master/
+/languagetool-master.zip
+
+# Raw captures are curated into MongrelWordProcessor/Screenshots before commit
+/Screenshot *.png

@@ -9,6 +9,8 @@ struct WordProcessorContentView: View {
     @State private var commandQuery: String = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var isFocusMode: Bool = false
+    @State private var showDocumentInsights: Bool = false
+    @State private var showWritingTools: Bool = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -20,6 +22,12 @@ struct WordProcessorContentView: View {
         .background(DesignTokens.glassDeep.ignoresSafeArea())
         .sheet(isPresented: $showCommandPalette) {
             WordProcessorCommandPaletteView(query: $commandQuery, onRunAction: runCommandPaletteAction)
+        }
+        .sheet(isPresented: $showDocumentInsights) {
+            DocumentInsightsView(snapshot: session.documentInsights, mode: session.authoringMode)
+        }
+        .sheet(isPresented: $showWritingTools) {
+            WritingToolsView(session: session)
         }
         .onExitCommand {
             if isFocusMode {
@@ -388,6 +396,9 @@ struct WordProcessorContentView: View {
                 Button("Export as RTF...") {
                     session.exportAsRTF()
                 }
+                Button("Export as Word (.docx)...") {
+                    session.exportAsWordDocument()
+                }
                 Button("Export as Plain Text...") {
                     session.exportAsPlainText()
                 }
@@ -413,6 +424,24 @@ struct WordProcessorContentView: View {
             .buttonStyle(.plain)
             .help("Focus mode")
             .keyboardShortcut("f", modifiers: [.command, .shift])
+
+            Button {
+                showDocumentInsights = true
+            } label: {
+                Image(systemName: "chart.bar.xaxis")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .buttonStyle(.plain)
+            .help("Document insights")
+
+            Button {
+                showWritingTools = true
+            } label: {
+                Image(systemName: "text.badge.checkmark")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .buttonStyle(.plain)
+            .help("Spelling and grammar tools")
 
             Button {
                 showCommandPalette = true
@@ -488,6 +517,29 @@ struct WordProcessorContentView: View {
 
             iconButton("textformat.size.smaller") { session.formattingBridge.decreaseFontSize() }
             iconButton("textformat.size.larger") { session.formattingBridge.increaseFontSize() }
+
+            Menu {
+                Button("Show Font Panel") {
+                    session.showFontPanel()
+                }
+                Button("Install Font Files...") {
+                    session.installFontFiles()
+                }
+            } label: {
+                Image(systemName: "textformat")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .menuStyle(.borderlessButton)
+            .help("Choose or install fonts")
+
+            Button {
+                session.formattingBridge.checkSpelling()
+            } label: {
+                Image(systemName: "checkmark.circle")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .buttonStyle(.plain)
+            .help("Check spelling and grammar")
         }
     }
 
@@ -1072,6 +1124,268 @@ struct WordProcessorContentView: View {
             session.authoringMode = .code
             session.codeTheme = theme
         }
+    }
+}
+
+private struct DocumentInsightsView: View {
+    @Environment(\.dismiss) private var dismiss
+    let snapshot: DocumentInsightSnapshot
+    let mode: AuthoringMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Document Insights")
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    Text("Structure and rhythm, computed locally")
+                        .font(.caption)
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.55))
+                }
+                Spacer()
+                Button("Close") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DesignTokens.accent)
+            }
+
+            HStack(spacing: 10) {
+                metricCard("Reading", value: snapshot.readingMinutes == 0 ? "-" : "\(snapshot.readingMinutes) min")
+                metricCard("Sentences", value: "\(snapshot.sentenceCount)")
+                metricCard(
+                    "Avg. sentence",
+                    value: snapshot.averageWordsPerSentence == 0
+                        ? "-"
+                        : String(format: "%.1f words", snapshot.averageWordsPerSentence)
+                )
+                if mode == .screenplay {
+                    metricCard("Dialogue", value: "\(Int((snapshot.dialogueShare * 100).rounded()))%")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Paragraph Rhythm")
+                rhythmChart.frame(height: 110)
+            }
+
+            if mode == .screenplay, !snapshot.scenes.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionTitle("Scene Weight")
+                    GeometryReader { geometry in
+                        HStack(spacing: 3) {
+                            ForEach(snapshot.scenes) { scene in
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(DesignTokens.accent.opacity(min(0.9, 0.35 + (scene.share * 1.8))))
+                                    .frame(width: max(5, geometry.size.width * scene.share))
+                            }
+                        }
+                    }
+                    .frame(height: 28)
+                }
+            }
+
+            if mode == .screenplay, !snapshot.characters.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    sectionTitle("Character Cues")
+                    ForEach(snapshot.characters) { character in
+                        HStack {
+                            Text(character.name).lineLimit(1)
+                            Spacer()
+                            Text("\(character.cueCount)")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(DesignTokens.accent)
+                        }
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(22)
+        .frame(width: 680)
+        .frame(minHeight: 470)
+        .foregroundStyle(DesignTokens.chromeText)
+        .glassChromeBackground(style: .deep, cornerRadius: 16)
+    }
+
+    private var rhythmChart: some View {
+        GeometryReader { geometry in
+            let maximum = max(snapshot.paragraphWordCounts.max() ?? 1, 1)
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(Array(snapshot.paragraphWordCounts.enumerated()), id: \.offset) { _, count in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(DesignTokens.accent.opacity(0.76))
+                        .frame(
+                            width: max(2, (geometry.size.width / CGFloat(max(snapshot.paragraphWordCounts.count, 1))) - 2),
+                            height: max(3, geometry.size.height * CGFloat(count) / CGFloat(maximum))
+                        )
+                        .help("\(count) words")
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .background(
+                LinearGradient(
+                    colors: [DesignTokens.glassCard.opacity(0.65), DesignTokens.glassBase.opacity(0.25)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+        }
+    }
+
+    private func metricCard(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.48))
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(DesignTokens.glassCard.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .textCase(.uppercase)
+            .foregroundStyle(DesignTokens.chromeText.opacity(0.62))
+    }
+}
+
+private struct WritingToolsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var session: DocumentSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Writing Tools")
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    Text("Immediate spelling plus optional local grammar analysis")
+                        .font(.caption)
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.55))
+                }
+                Spacer()
+                Button("Close") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DesignTokens.accent)
+            }
+
+            HStack(spacing: 10) {
+                writingToolCard(
+                    title: "SPELLING",
+                    value: session.companionSpellcheckSummary,
+                    detail: "macOS checker + Mongrel companion lexicon",
+                    buttonTitle: "Check Now"
+                ) {
+                    session.formattingBridge.checkSpelling()
+                }
+
+                writingToolCard(
+                    title: "LOCAL LANGUAGETOOL",
+                    value: session.languageToolState.title,
+                    detail: "127.0.0.1:8081 · text stays on this Mac",
+                    buttonTitle: "Run Local Check"
+                ) {
+                    session.checkWithLocalLanguageTool()
+                }
+            }
+
+            if case .unavailable(let message) = session.languageToolState {
+                Text("Start a LanguageTool HTTP server on port 8081, then retry. \(message)")
+                    .font(.caption)
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
+                    .padding(.horizontal, 2)
+            }
+
+            if session.languageToolIssues.isEmpty {
+                Spacer()
+                Text("LanguageTool suggestions will appear here. System spelling remains active while you type.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.46))
+                    .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(session.languageToolIssues) { issue in
+                            issueCard(issue)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 720)
+        .frame(minHeight: 500)
+        .foregroundStyle(DesignTokens.chromeText)
+        .glassChromeBackground(style: .deep, cornerRadius: 16)
+    }
+
+    private func issueCard(_ issue: LanguageToolIssue) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                session.focusLanguageToolIssue(issue)
+            } label: {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(issue.shortMessage.isEmpty ? issue.message : issue.shortMessage)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        Text(issue.message)
+                            .font(.caption)
+                            .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
+                    }
+                    Spacer()
+                    Text(issue.ruleID)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.38))
+                }
+            }
+            .buttonStyle(.plain)
+
+            if !issue.replacements.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(issue.replacements, id: \.self) { replacement in
+                        Button(replacement) {
+                            session.applyLanguageToolReplacement(replacement, for: issue)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(DesignTokens.glassCard.opacity(0.72), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func writingToolCard(
+        title: String,
+        value: String,
+        detail: String,
+        buttonTitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.48))
+            Text(value)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.52))
+            Button(buttonTitle, action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(13)
+        .background(DesignTokens.glassCard.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

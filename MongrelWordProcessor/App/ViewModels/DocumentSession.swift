@@ -84,6 +84,8 @@ extension UTType {
         exportedAs: "com.mongrel.screenplay",
         conformingTo: .data
     )
+
+    static let wordDocument = UTType(filenameExtension: "docx")!
 }
 
 extension NSAttributedString.Key {
@@ -248,7 +250,8 @@ enum CodeTheme: String, CaseIterable {
 
 @MainActor
 final class DocumentSession: ObservableObject {
-    static let openableDocumentTypes: [UTType] = [.mongrelScreenplay, .rtf, .plainText]
+    static let editableDocumentTypes: [UTType] = [.mongrelScreenplay, .rtf, .wordDocument, .plainText]
+    static let openableDocumentTypes = editableDocumentTypes
 
     @Published var title: String = "Untitled" {
         didSet {
@@ -267,12 +270,15 @@ final class DocumentSession: ObservableObject {
     @Published private(set) var screenplayPageCount: Int = 1
     @Published private(set) var screenplaySceneCount: Int = 0
     @Published private(set) var screenplayScenes: [ScreenplayScene] = []
+    @Published private(set) var documentInsights: DocumentInsightSnapshot = .empty
+    @Published private(set) var languageToolIssues: [LanguageToolIssue] = []
+    @Published private(set) var languageToolState: LanguageToolCheckState = .idle
     @Published private(set) var recentDocuments: [RecentDoc] = []
     @Published var authoringMode: AuthoringMode = .prose {
         didSet {
             guard authoringMode != oldValue else { return }
             if currentURL == nil {
-                currentType = authoringMode == .screenplay ? .mongrelScreenplay : .plainText
+                currentType = defaultDocumentType(for: authoringMode)
             }
             if !isApplyingProgrammaticState {
                 hasUnsavedChanges = true
@@ -331,7 +337,7 @@ final class DocumentSession: ObservableObject {
         return "System spellcheck only"
     }
 
-    private var currentType: UTType = .plainText
+    private var currentType: UTType = .rtf
     private var isApplyingProgrammaticState = false
     private let persistenceStore: WordProcessorPersistenceStore
     private let auditLogger = WordProcessorAuditLogger()
@@ -354,6 +360,7 @@ final class DocumentSession: ObservableObject {
             rawValue: defaults.string(forKey: screenplayViewStyleKey) ?? ""
         ) ?? .fitWidth
         self.typewriterMode = defaults.bool(forKey: typewriterModeKey)
+        ManagedFontLibrary.registerInstalledFonts()
         hasRestorableLastDocument = persistenceStore.hasLastDocumentBookmark
         auditLogger.info("session_initialized", metadata: ["hasRestorableLastDocument": hasRestorableLastDocument])
         auditLogger.info(
@@ -373,7 +380,8 @@ final class DocumentSession: ObservableObject {
             title = "Untitled"
             attributedText = NSAttributedString(string: "")
             currentURL = nil
-            currentType = authoringMode == .screenplay ? .mongrelScreenplay : .plainText
+            authoringMode = .prose
+            currentType = .rtf
             hasUnsavedChanges = false
         }
         updateMetrics()
@@ -402,7 +410,7 @@ final class DocumentSession: ObservableObject {
             title = "Untitled"
             attributedText = NSAttributedString(string: "")
             currentURL = nil
-            currentType = authoringMode == .screenplay ? .mongrelScreenplay : .plainText
+            currentType = defaultDocumentType(for: authoringMode)
             hasUnsavedChanges = false
         }
         updateMetrics()
@@ -543,35 +551,25 @@ final class DocumentSession: ObservableObject {
         }
     }
 
-    func saveDocumentAs() {
+    func saveDocumentAs(preferredType: UTType? = nil) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mongrelScreenplay, .rtf, .plainText]
+        panel.allowedContentTypes = preferredType.map { [$0] } ?? Self.editableDocumentTypes
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = suggestedFilename(for: currentType)
+        let initialType = preferredType ?? currentType
+        panel.nameFieldStringValue = suggestedFilename(for: initialType)
 
         guard panel.runModal() == .OK, let url = panel.url else {
             auditLogger.info("save_document_as_cancelled")
             return
         }
 
-        let ext = url.pathExtension.lowercased()
-        let type: UTType
-        if ext == "mgscreenplay" {
-            type = .mongrelScreenplay
-        } else if ext == "rtf" {
-            type = .rtf
-        } else if ext.isEmpty {
-            // User removed the extension — honour whatever format is currently active.
-            type = currentType
-        } else {
-            type = .plainText
-        }
+        let type = url.pathExtension.isEmpty ? initialType : documentType(for: url)
         saveDocument(to: url, type: type)
     }
 
     func saveDocumentCopyAs() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mongrelScreenplay, .rtf, .plainText]
+        panel.allowedContentTypes = Self.editableDocumentTypes
         panel.canCreateDirectories = true
         let baseName = sanitizedFilenameStem(from: title)
         let ext = currentType == .mongrelScreenplay
@@ -635,6 +633,71 @@ final class DocumentSession: ObservableObject {
         export(type: .rtf)
     }
 
+    func exportAsWordDocument() {
+        export(type: .wordDocument)
+    }
+
+    func showFontPanel() {
+        formattingBridge.showFontPanel()
+    }
+
+    func installFontFiles() {
+        do {
+            let count = try ManagedFontLibrary.installFontFiles()
+            guard count > 0 else { return }
+            formattingBridge.showFontPanel()
+            auditLogger.info("font_install_success", metadata: ["count": count])
+        } catch {
+            presentError("Could not install font", details: error.localizedDescription)
+            auditLogger.error("font_install_failed", error: error)
+        }
+    }
+
+    func checkWithLocalLanguageTool() {
+        let checkedText = attributedText.string
+        guard !checkedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            languageToolIssues = []
+            languageToolState = .complete(0)
+            return
+        }
+
+        languageToolState = .checking
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let issues = try await LocalLanguageToolClient.check(checkedText)
+                guard attributedText.string == checkedText else {
+                    languageToolIssues = []
+                    languageToolState = .idle
+                    auditLogger.info("language_tool_check_discarded_stale_result")
+                    return
+                }
+                languageToolIssues = issues
+                languageToolState = .complete(issues.count)
+                auditLogger.info("language_tool_check_success", metadata: ["issues": issues.count])
+            } catch {
+                languageToolIssues = []
+                languageToolState = .unavailable(error.localizedDescription)
+                auditLogger.warning("language_tool_check_unavailable", metadata: ["error": error.localizedDescription])
+            }
+        }
+    }
+
+    func focusLanguageToolIssue(_ issue: LanguageToolIssue) {
+        formattingBridge.focusRange(NSRange(location: issue.offset, length: issue.length))
+    }
+
+    func applyLanguageToolReplacement(_ replacement: String, for issue: LanguageToolIssue) {
+        let range = NSRange(location: issue.offset, length: issue.length)
+        guard range.location >= 0, range.length >= 0, NSMaxRange(range) <= attributedText.length else { return }
+        let updated = NSMutableAttributedString(attributedString: attributedText)
+        updated.replaceCharacters(in: range, with: replacement)
+        attributedText = updated
+        languageToolIssues = []
+        languageToolState = .idle
+        markDirty()
+    }
+
     func printDocument() {
         guard let data = makePDFData(), let document = PDFDocument(data: data) else {
             presentError("Could not print document", details: "The document could not be rendered for printing.")
@@ -695,8 +758,17 @@ final class DocumentSession: ObservableObject {
         switch url.pathExtension.lowercased() {
         case "mgscreenplay": return .mongrelScreenplay
         case "rtf": return .rtf
+        case "docx": return .wordDocument
         case "txt", "text": return .plainText
         default: return currentType
+        }
+    }
+
+    private func defaultDocumentType(for mode: AuthoringMode) -> UTType {
+        switch mode {
+        case .screenplay: return .mongrelScreenplay
+        case .code: return .plainText
+        case .prose: return .rtf
         }
     }
 
@@ -716,6 +788,15 @@ final class DocumentSession: ObservableObject {
                 documentAttributes: nil
             )
             return (text, .rtf, .prose)
+        }
+
+        if url.pathExtension.lowercased() == "docx" {
+            let text = try NSAttributedString(
+                url: url,
+                options: [.documentType: NSAttributedString.DocumentType.officeOpenXML],
+                documentAttributes: nil
+            )
+            return (text, .wordDocument, .prose)
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
@@ -745,11 +826,14 @@ final class DocumentSession: ObservableObject {
             if type == .mongrelScreenplay {
                 let data = try JSONEncoder().encode(MongrelScreenplayArchive(attributedText: attributedText))
                 try data.write(to: url, options: .atomic)
-            } else if type == .rtf {
+            } else if type == .rtf || type == .wordDocument {
                 let range = NSRange(location: 0, length: attributedText.length)
+                let documentType: NSAttributedString.DocumentType = type == .wordDocument
+                    ? .officeOpenXML
+                    : .rtf
                 let data = try attributedText.data(
                     from: range,
-                    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+                    documentAttributes: [.documentType: documentType]
                 )
                 try data.write(to: url, options: .atomic)
             } else {
@@ -840,6 +924,11 @@ extension DocumentSession {
         screenplayPageCount = estimateScreenplayPageCount()
         screenplayScenes = collectScreenplayScenes()
         screenplaySceneCount = screenplayScenes.count
+        documentInsights = DocumentInsightsAnalyzer.analyze(
+            attributedText,
+            scenes: screenplayScenes,
+            mode: authoringMode
+        )
     }
 
     private func estimateScreenplayPageCount() -> Int {

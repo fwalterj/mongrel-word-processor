@@ -70,6 +70,25 @@ private struct WordProcessorCommands: Commands {
             }
             .keyboardShortcut("S", modifiers: [.command, .shift])
 
+            Menu("Save As Type") {
+                Button("Rich Text (.rtf)") {
+                    session.saveDocumentAs(preferredType: .rtf)
+                }
+
+                Button("Microsoft Word (.docx)") {
+                    session.saveDocumentAs(preferredType: .wordDocument)
+                }
+
+                Button("Plain Text (.txt)") {
+                    session.saveDocumentAs(preferredType: .plainText)
+                }
+
+                Button("Mongrel Screenplay (.mgscreenplay)") {
+                    session.saveDocumentAs(preferredType: .mongrelScreenplay)
+                }
+                .disabled(session.authoringMode != .screenplay)
+            }
+
             Button("Save a Copy...") {
                 session.saveDocumentCopyAs()
             }
@@ -94,6 +113,20 @@ private struct WordProcessorCommands: Commands {
                 session.formattingBridge.autoFormatEntireScreenplay()
             }
             .disabled(session.authoringMode != .screenplay)
+
+            Divider()
+
+            Button("Check Spelling and Grammar") {
+                session.formattingBridge.checkSpelling()
+            }
+
+            Button("Show Fonts") {
+                session.showFontPanel()
+            }
+
+            Button("Install Font Files...") {
+                session.installFontFiles()
+            }
 
             Divider()
 
@@ -133,6 +166,10 @@ private struct WordProcessorCommands: Commands {
 
             Button("Export RTF") {
                 session.exportAsRTF()
+            }
+
+            Button("Export Microsoft Word") {
+                session.exportAsWordDocument()
             }
         }
     }

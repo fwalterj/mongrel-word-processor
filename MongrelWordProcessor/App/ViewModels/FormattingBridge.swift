@@ -43,6 +43,29 @@ final class FormattingBridge: ObservableObject {
     @Published private(set) var activeScreenplayElement: ScreenplayElement = .action
     @Published private(set) var screenplaySuggestions: [ScreenplaySuggestion] = []
 
+    func showFontPanel() {
+        guard let textView else { return }
+        textView.window?.makeFirstResponder(textView)
+        NSFontManager.shared.orderFrontFontPanel(nil)
+    }
+
+    func checkSpelling() {
+        guard let textView else { return }
+        textView.window?.makeFirstResponder(textView)
+        textView.checkTextInDocument(nil)
+        NSSpellChecker.shared.spellingPanel.makeKeyAndOrderFront(nil)
+    }
+
+    func focusRange(_ range: NSRange) {
+        guard let textView,
+              range.location >= 0,
+              range.length >= 0,
+              NSMaxRange(range) <= textView.string.utf16.count else { return }
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+    }
+
     /// Called by Coordinator.textViewDidChangeSelection to refresh active-state flags.
     func updateFormattingState(from tv: NSTextView) {
         let attrs = tv.selectedRange().length > 0
