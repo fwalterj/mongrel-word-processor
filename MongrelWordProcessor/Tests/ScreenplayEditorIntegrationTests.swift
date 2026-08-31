@@ -44,6 +44,44 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(typingElement(in: harness.textView), .transition)
     }
 
+    func testScreenplayDelegatePreservesSpacesAcrossInsertedWords() {
+        var editedText = NSAttributedString(string: "")
+        var editCount = 0
+        let bridge = FormattingBridge()
+        let editor = TextKit2EditorView(
+            attributedText: Binding(
+                get: { editedText },
+                set: { editedText = $0 }
+            ),
+            onEdit: { editCount += 1 },
+            onScreenplayElementChange: { _ in },
+            onPaginationChange: { _ in },
+            bridge: bridge,
+            companionLexicon: MongrelDictionaryCompanionLexicon(headwords: []),
+            authoringMode: .screenplay,
+            screenplayElement: .action,
+            codeLanguage: .swift,
+            codeTheme: .cobalt,
+            codeUseTabs: false,
+            codeTabWidth: 4,
+            codeLineWrap: true,
+            editorZoom: 1,
+            typewriterMode: false
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        coordinator.textView = textView
+        bridge.textView = textView
+        textView.delegate = coordinator
+        coordinator.applyEditorMode(.screenplay, to: textView)
+
+        textView.insertText("A quiet room waits.", replacementRange: NSRange(location: 0, length: 0))
+
+        XCTAssertEqual(textView.string, "A quiet room waits.")
+        XCTAssertEqual(editedText.string, "A quiet room waits.")
+        XCTAssertEqual(editCount, 1)
+    }
+
     func testContrastScreenplayUsesMatchingBlackPageAndWhiteText() {
         let appearance = MongrelAppearancePreferences.shared
         let originalMode = appearance.mode
@@ -108,7 +146,38 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         )
     }
 
+    func testCodeNoWrapEnablesHorizontalScrolling() {
+        let harness = makeHarness(authoringMode: .code)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 400))
+        scrollView.documentView = harness.textView
+
+        harness.coordinator.applyLineWrap(false, to: scrollView)
+
+        XCTAssertTrue(scrollView.hasHorizontalScroller)
+        XCTAssertTrue(harness.textView.isHorizontallyResizable)
+        XCTAssertFalse(harness.textView.textContainer?.widthTracksTextView ?? true)
+
+        harness.coordinator.applyLineWrap(true, to: scrollView)
+
+        XCTAssertFalse(scrollView.hasHorizontalScroller)
+        XCTAssertFalse(harness.textView.isHorizontallyResizable)
+        XCTAssertTrue(harness.textView.textContainer?.widthTracksTextView ?? false)
+    }
+
+    func testCodeCompletionScanHandlesEmojiWithoutCrashing() {
+        let harness = makeHarness(authoringMode: .code)
+        harness.textView.string = "😀a"
+        harness.textView.setSelectedRange(NSRange(location: (harness.textView.string as NSString).length, length: 0))
+
+        harness.coordinator.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: harness.textView)
+        )
+
+        XCTAssertEqual(harness.textView.string, "😀a")
+    }
+
     private func makeHarness(
+        authoringMode: AuthoringMode = .screenplay,
         onElementChange: @escaping (ScreenplayElement) -> Void = { _ in }
     ) -> (
         coordinator: TextKit2EditorView.Coordinator,
@@ -127,7 +196,7 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
             onPaginationChange: { _ in },
             bridge: bridge,
             companionLexicon: MongrelDictionaryCompanionLexicon(headwords: []),
-            authoringMode: .screenplay,
+            authoringMode: authoringMode,
             screenplayElement: .action,
             codeLanguage: .swift,
             codeTheme: .cobalt,
@@ -142,7 +211,7 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         coordinator.textView = textView
         textView.delegate = coordinator
         bridge.textView = textView
-        coordinator.applyEditorMode(.screenplay, to: textView)
+        coordinator.applyEditorMode(authoringMode, to: textView)
         return (coordinator, textView, bridge)
     }
 

@@ -66,6 +66,19 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testPlainTextImportDetectsUTF16Encoding() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Legacy Draft.txt")
+        try "Café after midnight".write(to: destination, atomically: true, encoding: .utf16)
+
+        let session = makeSession()
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        XCTAssertEqual(session.attributedText.string, "Café after midnight")
+        XCTAssertEqual(session.authoringMode, .prose)
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
     func testRTFRoundTripPreservesTextAndBasicFormatting() throws {
         let source = makeSession()
         let destination = temporaryDirectory.appendingPathComponent("Formatted.rtf")
@@ -116,6 +129,24 @@ final class DocumentSessionTests: XCTestCase {
             try XCTUnwrap(reopened.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
                 .fontDescriptor.symbolicTraits.contains(.bold)
         )
+    }
+
+    @MainActor
+    func testEmptyRichDocumentsCanBeSavedAndReopened() throws {
+        for (filename, type) in [("Blank.rtf", UTType.rtf), ("Blank.docx", UTType.wordDocument)] {
+            let destination = temporaryDirectory.appendingPathComponent(filename)
+            let source = makeSession()
+
+            XCTAssertTrue(source.saveDocument(to: destination, type: type), filename)
+            XCTAssertGreaterThan(try Data(contentsOf: destination).count, 0, filename)
+
+            let reopened = makeSession()
+            XCTAssertTrue(reopened.openDocument(at: destination), filename)
+            XCTAssertTrue(
+                reopened.attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                filename
+            )
+        }
     }
 
     @MainActor
@@ -198,6 +229,20 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testSceneCountRejectsPrefixLookalikes() {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        session.attributedText = NSAttributedString(
+            string: "INT. KITCHEN - DAY\nINT.ERIOR LOG ENTRY\nEXT.RA DETAIL\n"
+        )
+
+        session.markDirty()
+
+        XCTAssertEqual(session.screenplaySceneCount, 1)
+        XCTAssertEqual(session.screenplayScenes.first?.heading, "INT. KITCHEN - DAY")
+    }
+
+    @MainActor
     func testDocumentInsightsMeasureScreenplayRhythmAndCharacters() {
         let session = makeSession()
         session.authoringMode = .screenplay
@@ -256,6 +301,31 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testOversizedScreenplayMetadataIsIgnoredWithoutOverflow() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Hostile.mgscreenplay")
+        let richText = try NSAttributedString(string: "Safe text").data(
+            from: NSRange(location: 0, length: 9),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        )
+        let json = """
+        {
+          "formatVersion": 1,
+          "richTextData": "\(richText.base64EncodedString())",
+          "elementRanges": [
+            {"location": \(Int.max), "length": \(Int.max), "element": "action"}
+          ]
+        }
+        """
+        try XCTUnwrap(json.data(using: .utf8)).write(to: destination)
+
+        let session = makeSession()
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        XCTAssertEqual(session.attributedText.string, "Safe text")
+        XCTAssertNil(session.attributedText.attribute(.screenplayElement, at: 0, effectiveRange: nil))
+    }
+
+    @MainActor
     func testLongScreenplayExportsAsMultiplePDFPages() throws {
         let session = makeSession()
         session.authoringMode = .screenplay
@@ -284,6 +354,41 @@ final class DocumentSessionTests: XCTestCase {
         let destination = temporaryDirectory.appendingPathComponent("Status.txt")
         XCTAssertTrue(session.saveDocument(to: destination, type: .plainText))
         XCTAssertEqual(session.documentStatusLabel, "Saved")
+    }
+
+    @MainActor
+    func testCloseFromScreenplayReturnsToCleanProseState() {
+        let session = makeSession()
+        session.newScreenplay()
+        session.attributedText = NSAttributedString(string: "")
+
+        session.closeDocument()
+
+        XCTAssertEqual(session.authoringMode, .prose)
+        XCTAssertEqual(session.screenplayElement, .action)
+        XCTAssertEqual(session.title, "Untitled")
+        XCTAssertNil(session.currentURL)
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testStaleLanguageToolIssueCannotModifyDocument() {
+        let session = makeSession()
+        session.attributedText = NSAttributedString(string: "Their ready.")
+        let staleIssue = LanguageToolIssue(
+            id: "stale",
+            message: "Possible agreement error",
+            shortMessage: "Agreement",
+            offset: 0,
+            length: 5,
+            replacements: ["They're"],
+            ruleID: "TEST"
+        )
+
+        session.applyLanguageToolReplacement("They're", for: staleIssue)
+
+        XCTAssertEqual(session.attributedText.string, "Their ready.")
+        XCTAssertFalse(session.hasUnsavedChanges)
     }
 
     @MainActor

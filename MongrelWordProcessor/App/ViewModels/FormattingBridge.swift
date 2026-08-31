@@ -68,9 +68,15 @@ final class FormattingBridge: ObservableObject {
 
     /// Called by Coordinator.textViewDidChangeSelection to refresh active-state flags.
     func updateFormattingState(from tv: NSTextView) {
-        let attrs = tv.selectedRange().length > 0
-            ? tv.typingAttributes
-            : tv.typingAttributes
+        let range = tv.selectedRange()
+        let attrs: [NSAttributedString.Key: Any]
+        if range.length > 0,
+           let textStorage = tv.textStorage,
+           range.location < textStorage.length {
+            attrs = textStorage.attributes(at: range.location, effectiveRange: nil)
+        } else {
+            attrs = tv.typingAttributes
+        }
 
         // Bold / italic derive from the symbolic traits of the current font
         if let font = attrs[.font] as? NSFont {
@@ -87,7 +93,6 @@ final class FormattingBridge: ObservableObject {
         isUnderline = underlineVal != 0
 
         // Strikethrough — check at selection start when there's a selection
-        let range = tv.selectedRange()
         if range.length > 0, let ts = tv.textStorage {
             let strikeVal = ts.attribute(.strikethroughStyle, at: range.location, effectiveRange: nil) as? Int ?? 0
             isStrikethrough = strikeVal != 0
@@ -250,7 +255,8 @@ final class FormattingBridge: ObservableObject {
             previousElement: previousElement
         )
 
-        normalizeScreenplayParagraph(in: tv, range: paragraphRange, for: inferredElement)
+        // Live formatting must not trim text or synthesize punctuation while the
+        // writer is still typing. Full normalization remains an explicit action.
         applyScreenplayElement(inferredElement, to: tv, notifyTextChange: false)
         updateFormattingState(from: tv)
         return inferredElement

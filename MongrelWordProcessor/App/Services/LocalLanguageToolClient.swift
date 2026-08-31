@@ -38,10 +38,10 @@ enum LocalLanguageToolClient {
             }
 
             let message: String
-            let shortMessage: String
+            let shortMessage: String?
             let offset: Int
             let length: Int
-            let replacements: [Replacement]
+            let replacements: [Replacement]?
             let rule: Rule
         }
 
@@ -65,14 +65,14 @@ enum LocalLanguageToolClient {
             throw URLError(.badServerResponse)
         }
 
-        return try JSONDecoder().decode(Response.self, from: data).matches.map { match in
+        return try JSONDecoder().decode(Response.self, from: data).matches.enumerated().map { index, match in
             LanguageToolIssue(
-                id: "\(match.rule.id):\(match.offset):\(match.length)",
+                id: "\(index):\(match.rule.id):\(match.offset):\(match.length)",
                 message: match.message,
-                shortMessage: match.shortMessage,
+                shortMessage: match.shortMessage ?? "",
                 offset: match.offset,
                 length: match.length,
-                replacements: match.replacements.prefix(5).map(\.value),
+                replacements: match.replacements?.prefix(5).map(\.value) ?? [],
                 ruleID: match.rule.id
             )
         }

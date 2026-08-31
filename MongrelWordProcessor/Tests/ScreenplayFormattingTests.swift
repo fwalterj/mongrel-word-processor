@@ -21,6 +21,24 @@ final class ScreenplayFormattingTests: XCTestCase {
         XCTAssertEqual(textView.string, "He crosses the room.")
     }
 
+    func testLiveFormattingPreservesTrailingSpaceWhileTyping() {
+        let (bridge, textView) = makeEditor("A quiet room ")
+
+        let element = bridge.autoFormatScreenplay(in: textView)
+
+        XCTAssertEqual(element, .action)
+        XCTAssertEqual(textView.string, "A quiet room ")
+    }
+
+    func testLiveFormattingDoesNotPrematurelyCloseParenthetical() {
+        let (bridge, textView) = makeEditor("(")
+
+        let element = bridge.autoFormatScreenplay(in: textView)
+
+        XCTAssertEqual(element, .parenthetical)
+        XCTAssertEqual(textView.string, "(")
+    }
+
     func testUppercaseCharacterCueFlowsIntoDialogue() {
         let bridge = FormattingBridge()
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
@@ -76,6 +94,24 @@ final class ScreenplayFormattingTests: XCTestCase {
 
         textView.setSelectedRange(NSRange(location: 20, length: 0))
         XCTAssertEqual(bridge.detectedScreenplayElement(in: textView), .action)
+    }
+
+    func testFormattingStateReflectsSelectedTextInsteadOfTypingAttributes() {
+        let bridge = FormattingBridge()
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        textView.string = "Bold plain"
+        textView.textStorage?.addAttribute(
+            .font,
+            value: NSFont.boldSystemFont(ofSize: 14),
+            range: NSRange(location: 0, length: 4)
+        )
+        textView.typingAttributes[.font] = NSFont.systemFont(ofSize: 14)
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        bridge.updateFormattingState(from: textView)
+
+        XCTAssertTrue(bridge.isBold)
+        XCTAssertFalse(bridge.isItalic)
     }
 
     func testReturnEscapesEmptyDialogueBlocksToAction() {

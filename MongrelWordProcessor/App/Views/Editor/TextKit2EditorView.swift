@@ -363,6 +363,10 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isContinuousSpellCheckingEnabled = false
                 textView.drawsBackground = false
                 applyStandardDocumentMetrics(to: textView)
+                if let scrollView = textView.enclosingScrollView {
+                    applyLineWrap(parent.codeLineWrap, to: scrollView)
+                }
+                applyFormattingPrefs(useTabs: parent.codeUseTabs, tabWidth: parent.codeTabWidth, to: textView)
                 applyCodeHighlighting(to: textView)
             case .screenplay:
                 if let screenplayTextView = textView as? ScreenplayTextView {
@@ -396,22 +400,26 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         func applyLineWrap(_ wrap: Bool, to scrollView: NSScrollView) {
             guard let textView = scrollView.documentView as? NSTextView else { return }
+            scrollView.hasHorizontalScroller = !wrap
             if wrap {
+                textView.isHorizontallyResizable = false
                 textView.textContainer?.widthTracksTextView = true
                 textView.textContainer?.containerSize = NSSize(
                     width: scrollView.contentSize.width,
                     height: CGFloat.greatestFiniteMagnitude
                 )
             } else {
+                textView.isHorizontallyResizable = true
                 textView.textContainer?.widthTracksTextView = false
                 textView.textContainer?.containerSize = NSSize(
-                    width: 10_000,
+                    width: CGFloat.greatestFiniteMagnitude,
                     height: CGFloat.greatestFiniteMagnitude
                 )
             }
         }
 
         private func applyStandardDocumentMetrics(to textView: NSTextView) {
+            textView.enclosingScrollView?.hasHorizontalScroller = false
             textView.minSize = .zero
             textView.maxSize = NSSize(
                 width: CGFloat.greatestFiniteMagnitude,
@@ -426,6 +434,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
 
         private func applyScreenplayPageMetrics(to textView: NSTextView) {
+            textView.enclosingScrollView?.hasHorizontalScroller = false
             textView.minSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: 0)
             textView.maxSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: .greatestFiniteMagnitude)
             textView.isHorizontallyResizable = false
@@ -547,7 +556,8 @@ struct TextKit2EditorView: NSViewRepresentable {
             var start = cursor - 1
             while start > 0 {
                 let ch = text.character(at: start - 1)
-                if !(CharacterSet.alphanumerics.contains(UnicodeScalar(ch)!) || ch == 95) {
+                let isAlphanumeric = UnicodeScalar(ch).map(CharacterSet.alphanumerics.contains) ?? false
+                if !(isAlphanumeric || ch == 95) {
                     break
                 }
                 start -= 1

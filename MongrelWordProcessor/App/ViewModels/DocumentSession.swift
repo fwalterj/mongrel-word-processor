@@ -346,6 +346,7 @@ final class DocumentSession: ObservableObject {
     private let editorZoomKey = "wordprocessor.editorZoom"
     private let screenplayViewStyleKey = "wordprocessor.screenplayViewStyle"
     private let typewriterModeKey = "wordprocessor.typewriterMode"
+    private var languageToolRequestID: UUID?
 
     init(
         defaults: UserDefaults = .standard,
@@ -382,8 +383,10 @@ final class DocumentSession: ObservableObject {
             currentURL = nil
             authoringMode = .prose
             currentType = .rtf
+            screenplayElement = .action
             hasUnsavedChanges = false
         }
+        invalidateLanguageToolResults()
         updateMetrics()
         auditLogger.info("new_document")
     }
@@ -399,6 +402,7 @@ final class DocumentSession: ObservableObject {
             screenplayElement = .sceneHeading
             hasUnsavedChanges = false
         }
+        invalidateLanguageToolResults()
         updateMetrics()
         auditLogger.info("new_screenplay")
     }
@@ -410,15 +414,19 @@ final class DocumentSession: ObservableObject {
             title = "Untitled"
             attributedText = NSAttributedString(string: "")
             currentURL = nil
-            currentType = defaultDocumentType(for: authoringMode)
+            authoringMode = .prose
+            currentType = .rtf
+            screenplayElement = .action
             hasUnsavedChanges = false
         }
+        invalidateLanguageToolResults()
         updateMetrics()
         auditLogger.info("close_document")
     }
 
     func markDirty() {
         hasUnsavedChanges = true
+        invalidateLanguageToolResults()
         updateMetrics()
     }
 
@@ -526,6 +534,7 @@ final class DocumentSession: ObservableObject {
                 authoringMode = loaded.mode
                 hasUnsavedChanges = false
             }
+            invalidateLanguageToolResults()
             updateMetrics()
             trackRecent(url)
 
@@ -662,20 +671,26 @@ final class DocumentSession: ObservableObject {
         }
 
         languageToolState = .checking
+        languageToolIssues = []
+        let requestID = UUID()
+        languageToolRequestID = requestID
         Task { [weak self] in
             guard let self else { return }
             do {
                 let issues = try await LocalLanguageToolClient.check(checkedText)
+                guard languageToolRequestID == requestID else { return }
                 guard attributedText.string == checkedText else {
-                    languageToolIssues = []
-                    languageToolState = .idle
+                    invalidateLanguageToolResults()
                     auditLogger.info("language_tool_check_discarded_stale_result")
                     return
                 }
+                languageToolRequestID = nil
                 languageToolIssues = issues
                 languageToolState = .complete(issues.count)
                 auditLogger.info("language_tool_check_success", metadata: ["issues": issues.count])
             } catch {
+                guard languageToolRequestID == requestID else { return }
+                languageToolRequestID = nil
                 languageToolIssues = []
                 languageToolState = .unavailable(error.localizedDescription)
                 auditLogger.warning("language_tool_check_unavailable", metadata: ["error": error.localizedDescription])
@@ -688,6 +703,7 @@ final class DocumentSession: ObservableObject {
     }
 
     func applyLanguageToolReplacement(_ replacement: String, for issue: LanguageToolIssue) {
+        guard languageToolIssues.contains(issue) else { return }
         let range = NSRange(location: issue.offset, length: issue.length)
         guard range.location >= 0, range.length >= 0, NSMaxRange(range) <= attributedText.length else { return }
         let updated = NSMutableAttributedString(attributedString: attributedText)
@@ -696,6 +712,16 @@ final class DocumentSession: ObservableObject {
         languageToolIssues = []
         languageToolState = .idle
         markDirty()
+    }
+
+    private func invalidateLanguageToolResults() {
+        languageToolRequestID = nil
+        if !languageToolIssues.isEmpty {
+            languageToolIssues = []
+        }
+        if languageToolState != .idle {
+            languageToolState = .idle
+        }
     }
 
     func printDocument() {
@@ -799,7 +825,12 @@ final class DocumentSession: ObservableObject {
             return (text, .wordDocument, .prose)
         }
 
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let imported = try NSAttributedString(
+            url: url,
+            options: [.documentType: NSAttributedString.DocumentType.plain],
+            documentAttributes: nil
+        )
+        let text = imported.string
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.35
         let attributed = NSAttributedString(
@@ -1034,7 +1065,12 @@ extension DocumentSession {
         let sceneHeadingPrefixes = [
             "INT.", "EXT.", "INT/EXT.", "INT./EXT.", "EXT./INT.", "I/E.", "EST."
         ]
-        return sceneHeadingPrefixes.contains { normalized.hasPrefix($0) }
+        return sceneHeadingPrefixes.contains { prefix in
+            guard normalized.hasPrefix(prefix) else { return false }
+            guard normalized.count > prefix.count else { return true }
+            let boundary = normalized.index(normalized.startIndex, offsetBy: prefix.count)
+            return normalized[boundary].isWhitespace
+        }
     }
 
     private func loadRecentDocuments() {
@@ -1118,7 +1154,8 @@ private struct MongrelScreenplayArchive: Codable {
             guard ScreenplayElement(rawValue: elementRange.element) != nil,
                   elementRange.location >= 0,
                   elementRange.length >= 0,
-                  elementRange.location + elementRange.length <= restored.length else { continue }
+                  elementRange.location <= restored.length,
+                  elementRange.length <= restored.length - elementRange.location else { continue }
             restored.addAttribute(
                 .screenplayElement,
                 value: elementRange.element,
