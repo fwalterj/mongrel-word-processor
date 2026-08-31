@@ -7,18 +7,24 @@ struct WordProcessorContentView: View {
     @State private var showShortcutHelp: Bool = false
     @State private var showCommandPalette: Bool = false
     @State private var commandQuery: String = ""
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isSidebarVisible: Bool = true
     @State private var isFocusMode: Bool = false
     @State private var showDocumentInsights: Bool = false
     @State private var showWritingTools: Bool = false
+    @State private var showPageLayout: Bool = false
+    @State private var isNativeFullScreen: Bool = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
-        } detail: {
+        HStack(spacing: 0) {
+            if isSidebarVisible && !isFocusMode {
+                sidebar
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                Rectangle()
+                    .fill(DesignTokens.borderRim.opacity(0.38))
+                    .frame(width: 0.5)
+            }
             detailPane
         }
-        .navigationSplitViewStyle(.balanced)
         .background(DesignTokens.glassDeep.ignoresSafeArea())
         .sheet(isPresented: $showCommandPalette) {
             WordProcessorCommandPaletteView(query: $commandQuery, onRunAction: runCommandPaletteAction)
@@ -28,6 +34,15 @@ struct WordProcessorContentView: View {
         }
         .sheet(isPresented: $showWritingTools) {
             WritingToolsView(session: session)
+        }
+        .sheet(isPresented: $showPageLayout) {
+            DocumentPageLayoutView(session: session)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            isNativeFullScreen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            isNativeFullScreen = false
         }
         .onExitCommand {
             if isFocusMode {
@@ -47,7 +62,7 @@ struct WordProcessorContentView: View {
                     .foregroundStyle(DesignTokens.chromeText.opacity(0.45))
             }
             .padding(.horizontal, 14)
-            .padding(.top, 34)
+            .padding(.top, isNativeFullScreen ? 14 : 34)
             .padding(.bottom, 12)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -209,7 +224,19 @@ struct WordProcessorContentView: View {
     }
 
     private var topChrome: some View {
-        HStack(spacing: 10) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isSidebarVisible.toggle()
+                }
+            } label: {
+                Image(systemName: isSidebarVisible ? "sidebar.left" : "sidebar.right")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.76))
+            }
+            .buttonStyle(.plain)
+            .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
+
             Image(systemName: "doc.text.fill")
                 .foregroundStyle(DesignTokens.accent)
 
@@ -223,6 +250,7 @@ struct WordProcessorContentView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(DesignTokens.glassCard.opacity(0.7))
                 )
+                .frame(minWidth: 210, idealWidth: 280, maxWidth: 360)
 
             if session.hasUnsavedChanges {
                 Text("Unsaved")
@@ -385,6 +413,28 @@ struct WordProcessorContentView: View {
                 .menuStyle(.borderlessButton)
             }
 
+            Divider()
+                .frame(height: 18)
+
+            Button {
+                showPageLayout = true
+            } label: {
+                Label("Page Layout", systemImage: "doc.badge.gearshape")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.88))
+            }
+            .buttonStyle(.plain)
+            .help("Headers, footers, page fields, and artwork")
+
+            Button {
+                session.formattingBridge.insertImageAttachment()
+            } label: {
+                Image(systemName: "photo.badge.plus")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .buttonStyle(.plain)
+            .help("Insert image (PNG, JPEG, HEIC, TIFF, GIF, or PDF)")
+            .disabled(session.authoringMode == .code)
+
             Menu {
                 Button("Save a Copy...") {
                     session.saveDocumentCopyAs()
@@ -395,6 +445,9 @@ struct WordProcessorContentView: View {
                 }
                 Button("Export as RTF...") {
                     session.exportAsRTF()
+                }
+                Button("Export as RTFD with Attachments...") {
+                    session.exportAsRTFD()
                 }
                 Button("Export as Word (.docx)...") {
                     session.exportAsWordDocument()
@@ -462,11 +515,23 @@ struct WordProcessorContentView: View {
             .popover(isPresented: $showShortcutHelp, arrowEdge: .top) {
                 shortcutHelp
             }
+            }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 9)
-        .padding(.bottom, 7)
-        .background(DesignTokens.glassBase.opacity(0.82))
+        .padding(.top, isNativeFullScreen ? 11 : 9)
+        .padding(.bottom, 9)
+        .background(
+            LinearGradient(
+                colors: [DesignTokens.glassElevated.opacity(0.94), DesignTokens.glassBase.opacity(0.80)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(DesignTokens.borderRim.opacity(0.46))
+                .frame(height: 0.5)
+        }
     }
 
     private var formattingToolbar: some View {
@@ -531,6 +596,15 @@ struct WordProcessorContentView: View {
             }
             .menuStyle(.borderlessButton)
             .help("Choose or install fonts")
+
+            Button {
+                session.formattingBridge.insertImageAttachment()
+            } label: {
+                Image(systemName: "photo.badge.plus")
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+            }
+            .buttonStyle(.plain)
+            .help("Insert image")
 
             Button {
                 session.formattingBridge.checkSpelling()
@@ -623,7 +697,7 @@ struct WordProcessorContentView: View {
                     }
                     .scrollIndicators(.visible)
                 }
-            } else {
+            } else if session.authoringMode == .code {
                 coreEditor(editorZoom: session.editorZoom)
                     .background(selectedEditorBackground)
                     .overlay(
@@ -631,6 +705,8 @@ struct WordProcessorContentView: View {
                             .stroke(DesignTokens.borderRim.opacity(0.45), lineWidth: 0.6)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                proseEditorCanvas
             }
         }
         .padding(.horizontal, 10)
@@ -647,6 +723,29 @@ struct WordProcessorContentView: View {
                 emptyDocumentHint
                     .allowsHitTesting(false)
             }
+        }
+    }
+
+    private var proseEditorCanvas: some View {
+        GeometryReader { geometry in
+            let outerMargin: CGFloat = isFocusMode ? 52 : 30
+            let maximumWidth: CGFloat = isFocusMode ? 1_080 : 980
+            let canvasWidth = max(560, min(maximumWidth, geometry.size.width - outerMargin))
+
+            HStack(spacing: 0) {
+                Spacer(minLength: 14)
+                coreEditor(editorZoom: session.editorZoom)
+                    .frame(width: canvasWidth, height: geometry.size.height)
+                    .background(selectedEditorBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: isFocusMode ? 8 : 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: isFocusMode ? 8 : 12, style: .continuous)
+                            .stroke(DesignTokens.borderRim.opacity(isFocusMode ? 0.18 : 0.34), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.black.opacity(isFocusMode ? 0.04 : 0.10), radius: 20, y: 10)
+                Spacer(minLength: 14)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
     }
 
@@ -894,7 +993,6 @@ struct WordProcessorContentView: View {
     private func setFocusMode(_ enabled: Bool) {
         withAnimation(.easeInOut(duration: 0.2)) {
             isFocusMode = enabled
-            columnVisibility = enabled ? .detailOnly : .all
         }
         session.formattingBridge.focusEditor()
     }
@@ -1124,6 +1222,192 @@ struct WordProcessorContentView: View {
             session.authoringMode = .code
             session.codeTheme = theme
         }
+    }
+}
+
+private struct DocumentPageLayoutView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var session: DocumentSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Page Layout")
+                        .font(.system(size: 21, weight: .semibold, design: .rounded))
+                    Text("Headers and footers used by Mongrel documents, PDF export, and print")
+                        .font(.caption)
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.56))
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(20)
+
+            Divider().opacity(0.35)
+
+            ScrollView {
+                VStack(spacing: 16) {
+                    pagePreview
+
+                    PageBandEditor(
+                        title: "Header",
+                        band: $session.pageLayout.header,
+                        chooseImage: { session.choosePageBandImage(for: .header) },
+                        removeImage: { session.removePageBandImage(for: .header) }
+                    )
+
+                    PageBandEditor(
+                        title: "Footer",
+                        band: $session.pageLayout.footer,
+                        chooseImage: { session.choosePageBandImage(for: .footer) },
+                        removeImage: { session.removePageBandImage(for: .footer) }
+                    )
+
+                    Toggle("Show header and footer on the first page", isOn: $session.pageLayout.showsOnFirstPage)
+                        .toggleStyle(.switch)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Fields")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .textCase(.uppercase)
+                            .foregroundStyle(DesignTokens.chromeText.opacity(0.55))
+                        Text("Use {title}, {page}, {pages}, or {date} in either text field.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(DesignTokens.chromeText.opacity(0.74))
+                        Text("RTFD retains embedded body images. RTF and DOCX retain styled text but may discard attachments. None preserve Mongrel page furniture; use .mongreldoc for editable fidelity or PDF for final delivery.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(DesignTokens.chromeText.opacity(0.52))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(DesignTokens.glassCard.opacity(0.58), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(20)
+            }
+        }
+        .frame(width: 680, height: 760)
+        .background(DesignTokens.glassDeep)
+        .foregroundStyle(DesignTokens.chromeText)
+    }
+
+    private var pagePreview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(red: 0.97, green: 0.96, blue: 0.92))
+                .shadow(color: Color.black.opacity(0.16), radius: 18, y: 8)
+
+            VStack(spacing: 0) {
+                previewBand(session.pageLayout.header, pageNumber: 1, pageCount: 3)
+                Spacer()
+                VStack(alignment: .leading, spacing: 7) {
+                    RoundedRectangle(cornerRadius: 2).frame(width: 230, height: 5)
+                    RoundedRectangle(cornerRadius: 2).frame(width: 205, height: 5)
+                    RoundedRectangle(cornerRadius: 2).frame(width: 220, height: 5)
+                }
+                .foregroundStyle(Color.black.opacity(0.15))
+                Spacer()
+                previewBand(session.pageLayout.footer, pageNumber: 1, pageCount: 3)
+            }
+            .padding(18)
+        }
+        .frame(width: 310, height: 220)
+    }
+
+    @ViewBuilder
+    private func previewBand(_ band: DocumentPageBand, pageNumber: Int, pageCount: Int) -> some View {
+        if band.hasRenderableContent {
+            HStack(spacing: 7) {
+                if let image = band.image?.image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 44, maxHeight: 18)
+                }
+                Text(session.pageLayout.resolvedText(
+                    for: band,
+                    title: session.title,
+                    pageNumber: pageNumber,
+                    pageCount: pageCount
+                ))
+                .font(.system(size: 7.5, weight: .medium, design: .rounded))
+                .lineLimit(1)
+            }
+            .foregroundStyle(Color.black.opacity(0.66))
+            .frame(maxWidth: .infinity, alignment: swiftUIAlignment(for: band.alignment))
+        } else {
+            Color.clear.frame(height: 18)
+        }
+    }
+
+    private func swiftUIAlignment(for alignment: PageBandAlignment) -> Alignment {
+        switch alignment {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+}
+
+private struct PageBandEditor: View {
+    let title: String
+    @Binding var band: DocumentPageBand
+    let chooseImage: () -> Void
+    let removeImage: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle(title, isOn: $band.isEnabled)
+                .toggleStyle(.switch)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+
+            Group {
+                TextField("Text or fields", text: $band.text)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Picker("Alignment", selection: $band.alignment) {
+                        ForEach(PageBandAlignment.allCases) { alignment in
+                            Text(alignment.title).tag(alignment)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Toggle("Page number", isOn: $band.includesPageNumber)
+                        .toggleStyle(.checkbox)
+                        .fixedSize()
+                }
+
+                HStack(spacing: 10) {
+                    Button {
+                        chooseImage()
+                    } label: {
+                        Label(band.image == nil ? "Attach Artwork" : "Replace Artwork", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(.bordered)
+
+                    if let image = band.image {
+                        Text(image.filename)
+                            .font(.caption)
+                            .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
+                            .lineLimit(1)
+                        Button("Remove", role: .destructive) { removeImage() }
+                            .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+            }
+            .disabled(!band.isEnabled)
+        }
+        .padding(16)
+        .background(DesignTokens.glassElevated.opacity(0.60), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(DesignTokens.borderRim.opacity(band.isEnabled ? 0.56 : 0.24), lineWidth: 0.6)
+        )
     }
 }
 

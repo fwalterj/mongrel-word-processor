@@ -80,6 +80,11 @@ struct ScreenplayPageLayout {
 }
 
 extension UTType {
+    static let mongrelDocument = UTType(
+        exportedAs: "com.mongrel.document",
+        conformingTo: .data
+    )
+
     static let mongrelScreenplay = UTType(
         exportedAs: "com.mongrel.screenplay",
         conformingTo: .data
@@ -250,7 +255,14 @@ enum CodeTheme: String, CaseIterable {
 
 @MainActor
 final class DocumentSession: ObservableObject {
-    static let editableDocumentTypes: [UTType] = [.mongrelScreenplay, .rtf, .wordDocument, .plainText]
+    static let editableDocumentTypes: [UTType] = [
+        .mongrelDocument,
+        .mongrelScreenplay,
+        .rtfd,
+        .rtf,
+        .wordDocument,
+        .plainText
+    ]
     static let openableDocumentTypes = editableDocumentTypes
 
     @Published var title: String = "Untitled" {
@@ -274,6 +286,12 @@ final class DocumentSession: ObservableObject {
     @Published private(set) var languageToolIssues: [LanguageToolIssue] = []
     @Published private(set) var languageToolState: LanguageToolCheckState = .idle
     @Published private(set) var recentDocuments: [RecentDoc] = []
+    @Published var pageLayout: DocumentPageLayout = .empty {
+        didSet {
+            guard pageLayout != oldValue, !isApplyingProgrammaticState else { return }
+            hasUnsavedChanges = true
+        }
+    }
     @Published var authoringMode: AuthoringMode = .prose {
         didSet {
             guard authoringMode != oldValue else { return }
@@ -337,7 +355,7 @@ final class DocumentSession: ObservableObject {
         return "System spellcheck only"
     }
 
-    private var currentType: UTType = .rtf
+    private var currentType: UTType = .mongrelDocument
     private var isApplyingProgrammaticState = false
     private let persistenceStore: WordProcessorPersistenceStore
     private let auditLogger = WordProcessorAuditLogger()
@@ -382,8 +400,9 @@ final class DocumentSession: ObservableObject {
             attributedText = NSAttributedString(string: "")
             currentURL = nil
             authoringMode = .prose
-            currentType = .rtf
+            currentType = .mongrelDocument
             screenplayElement = .action
+            pageLayout = .empty
             hasUnsavedChanges = false
         }
         invalidateLanguageToolResults()
@@ -400,6 +419,7 @@ final class DocumentSession: ObservableObject {
             currentType = .mongrelScreenplay
             authoringMode = .screenplay
             screenplayElement = .sceneHeading
+            pageLayout = .empty
             hasUnsavedChanges = false
         }
         invalidateLanguageToolResults()
@@ -415,8 +435,9 @@ final class DocumentSession: ObservableObject {
             attributedText = NSAttributedString(string: "")
             currentURL = nil
             authoringMode = .prose
-            currentType = .rtf
+            currentType = .mongrelDocument
             screenplayElement = .action
+            pageLayout = .empty
             hasUnsavedChanges = false
         }
         invalidateLanguageToolResults()
@@ -532,6 +553,7 @@ final class DocumentSession: ObservableObject {
                 currentURL = url
                 currentType = loaded.type
                 authoringMode = loaded.mode
+                pageLayout = loaded.pageLayout
                 hasUnsavedChanges = false
             }
             invalidateLanguageToolResults()
@@ -553,6 +575,31 @@ final class DocumentSession: ObservableObject {
     }
 
     func saveDocument() {
+        if pageLayout.hasRenderableContent,
+           currentURL != nil,
+           currentType != .mongrelDocument,
+           currentType != .mongrelScreenplay {
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "Preserve page layout?"
+            alert.informativeText = "RTF, RTFD, Word, and plain-text exports do not retain Mongrel headers and footers. Save a native Mongrel document to keep them editable."
+            alert.addButton(withTitle: "Save as Mongrel Document")
+            alert.addButton(withTitle: "Save Without Page Layout")
+            alert.addButton(withTitle: "Cancel")
+
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                saveDocumentAs(preferredType: .mongrelDocument)
+            case .alertSecondButtonReturn:
+                if let currentURL {
+                    writeDocument(to: currentURL, type: currentType)
+                }
+            default:
+                break
+            }
+            return
+        }
+
         if let currentURL {
             writeDocument(to: currentURL, type: currentType)
         } else {
@@ -581,9 +628,7 @@ final class DocumentSession: ObservableObject {
         panel.allowedContentTypes = Self.editableDocumentTypes
         panel.canCreateDirectories = true
         let baseName = sanitizedFilenameStem(from: title)
-        let ext = currentType == .mongrelScreenplay
-            ? "mgscreenplay"
-            : (currentType.preferredFilenameExtension ?? "txt")
+        let ext = suggestedFilename(for: currentType).split(separator: ".").last.map(String.init) ?? "txt"
         panel.nameFieldStringValue = "\(baseName)-copy.\(ext)"
 
         guard panel.runModal() == .OK, let url = panel.url else {
@@ -642,6 +687,10 @@ final class DocumentSession: ObservableObject {
         export(type: .rtf)
     }
 
+    func exportAsRTFD() {
+        export(type: .rtfd)
+    }
+
     func exportAsWordDocument() {
         export(type: .wordDocument)
     }
@@ -659,6 +708,46 @@ final class DocumentSession: ObservableObject {
         } catch {
             presentError("Could not install font", details: error.localizedDescription)
             auditLogger.error("font_install_failed", error: error)
+        }
+    }
+
+    func choosePageBandImage(for location: PageBandLocation) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = DocumentImageSupport.contentTypes
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose PNG, JPEG, HEIC, TIFF, GIF, or PDF artwork up to 20 MB."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let image = try DocumentImageSupport.loadPageImage(from: url)
+            switch location {
+            case .header:
+                pageLayout.header.image = image
+                pageLayout.header.isEnabled = true
+            case .footer:
+                pageLayout.footer.image = image
+                pageLayout.footer.isEnabled = true
+            }
+            auditLogger.info("page_band_image_added", metadata: [
+                "location": location.rawValue,
+                "type": image.contentTypeIdentifier,
+                "bytes": image.data.count
+            ])
+        } catch {
+            presentError(
+                "Could not attach image",
+                details: "Choose a valid PNG, JPEG, HEIC, TIFF, GIF, or PDF file no larger than 20 MB."
+            )
+            auditLogger.error("page_band_image_failed", error: error, metadata: ["location": location.rawValue])
+        }
+    }
+
+    func removePageBandImage(for location: PageBandLocation) {
+        switch location {
+        case .header: pageLayout.header.image = nil
+        case .footer: pageLayout.footer.image = nil
         }
     }
 
@@ -761,7 +850,14 @@ final class DocumentSession: ObservableObject {
 
     private func suggestedFilename(for type: UTType) -> String {
         let safeTitle = sanitizedFilenameStem(from: title)
-        let ext = type == .mongrelScreenplay ? "mgscreenplay" : (type.preferredFilenameExtension ?? "txt")
+        let ext: String
+        if type == .mongrelDocument {
+            ext = "mongreldoc"
+        } else if type == .mongrelScreenplay {
+            ext = "mgscreenplay"
+        } else {
+            ext = type.preferredFilenameExtension ?? "txt"
+        }
         return "\(safeTitle).\(ext)"
     }
 
@@ -782,7 +878,9 @@ final class DocumentSession: ObservableObject {
 
     private func documentType(for url: URL) -> UTType {
         switch url.pathExtension.lowercased() {
+        case "mongreldoc": return .mongrelDocument
         case "mgscreenplay": return .mongrelScreenplay
+        case "rtfd": return .rtfd
         case "rtf": return .rtf
         case "docx": return .wordDocument
         case "txt", "text": return .plainText
@@ -794,17 +892,40 @@ final class DocumentSession: ObservableObject {
         switch mode {
         case .screenplay: return .mongrelScreenplay
         case .code: return .plainText
-        case .prose: return .rtf
+        case .prose: return .mongrelDocument
         }
     }
 
-    private func loadAttributedString(from url: URL) throws -> (text: NSAttributedString, type: UTType, mode: AuthoringMode) {
+    private func loadAttributedString(from url: URL) throws -> (
+        text: NSAttributedString,
+        type: UTType,
+        mode: AuthoringMode,
+        pageLayout: DocumentPageLayout
+    ) {
+        if url.pathExtension.lowercased() == "mongreldoc" {
+            let archive = try JSONDecoder().decode(
+                MongrelDocumentArchive.self,
+                from: Data(contentsOf: url)
+            )
+            return (
+                try archive.makeAttributedString(),
+                .mongrelDocument,
+                archive.authoringMode,
+                archive.pageLayout.sanitized
+            )
+        }
+
         if url.pathExtension.lowercased() == "mgscreenplay" {
             let archive = try JSONDecoder().decode(
                 MongrelScreenplayArchive.self,
                 from: Data(contentsOf: url)
             )
-            return (try archive.makeAttributedString(), .mongrelScreenplay, .screenplay)
+            return (
+                try archive.makeAttributedString(),
+                .mongrelScreenplay,
+                .screenplay,
+                (archive.pageLayout ?? .empty).sanitized
+            )
         }
 
         if url.pathExtension.lowercased() == "rtf" {
@@ -813,7 +934,16 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
             )
-            return (text, .rtf, .prose)
+            return (text, .rtf, .prose, .empty)
+        }
+
+        if url.pathExtension.lowercased() == "rtfd" {
+            let text = try NSAttributedString(
+                url: url,
+                options: [.documentType: NSAttributedString.DocumentType.rtfd],
+                documentAttributes: nil
+            )
+            return (text, .rtfd, .prose, .empty)
         }
 
         if url.pathExtension.lowercased() == "docx" {
@@ -822,7 +952,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.officeOpenXML],
                 documentAttributes: nil
             )
-            return (text, .wordDocument, .prose)
+            return (text, .wordDocument, .prose, .empty)
         }
 
         let imported = try NSAttributedString(
@@ -841,7 +971,7 @@ final class DocumentSession: ObservableObject {
                 .paragraphStyle: paragraph
             ]
         )
-        return (attributed, .plainText, .prose)
+        return (attributed, .plainText, .prose, .empty)
     }
 
     @discardableResult
@@ -854,9 +984,26 @@ final class DocumentSession: ObservableObject {
         }
 
         do {
-            if type == .mongrelScreenplay {
-                let data = try JSONEncoder().encode(MongrelScreenplayArchive(attributedText: attributedText))
+            if type == .mongrelDocument {
+                let data = try JSONEncoder().encode(MongrelDocumentArchive(
+                    attributedText: attributedText,
+                    authoringMode: authoringMode,
+                    pageLayout: pageLayout
+                ))
                 try data.write(to: url, options: .atomic)
+            } else if type == .mongrelScreenplay {
+                let data = try JSONEncoder().encode(MongrelScreenplayArchive(
+                    attributedText: attributedText,
+                    pageLayout: pageLayout
+                ))
+                try data.write(to: url, options: .atomic)
+            } else if type == .rtfd {
+                let range = NSRange(location: 0, length: attributedText.length)
+                let wrapper = try attributedText.fileWrapper(
+                    from: range,
+                    documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+                )
+                try wrapper.write(to: url, options: .atomic, originalContentsURL: nil)
             } else if type == .rtf || type == .wordDocument {
                 let range = NSRange(location: 0, length: attributedText.length)
                 let documentType: NSAttributedString.DocumentType = type == .wordDocument
@@ -902,7 +1049,9 @@ final class DocumentSession: ObservableObject {
         return PaginatedDocumentPDFRenderer.render(
             attributedText,
             margins: margins,
-            showsPageNumbers: authoringMode == .screenplay
+            fallbackPageNumbers: authoringMode == .screenplay,
+            title: title,
+            pageLayout: pageLayout
         )
     }
 
@@ -1110,6 +1259,73 @@ extension DocumentSession {
     }
 }
 
+private struct MongrelDocumentArchive: Codable {
+    struct ElementRange: Codable {
+        let location: Int
+        let length: Int
+        let element: String
+    }
+
+    let formatVersion: Int
+    let richTextData: Data
+    let mode: String
+    let pageLayout: DocumentPageLayout
+    let elementRanges: [ElementRange]
+
+    var authoringMode: AuthoringMode {
+        AuthoringMode(rawValue: mode) ?? .prose
+    }
+
+    init(
+        attributedText: NSAttributedString,
+        authoringMode: AuthoringMode,
+        pageLayout: DocumentPageLayout
+    ) throws {
+        formatVersion = 1
+        richTextData = try attributedText.data(
+            from: NSRange(location: 0, length: attributedText.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
+        )
+        mode = authoringMode.rawValue
+        self.pageLayout = pageLayout
+
+        var ranges: [ElementRange] = []
+        attributedText.enumerateAttribute(
+            .screenplayElement,
+            in: NSRange(location: 0, length: attributedText.length)
+        ) { value, range, _ in
+            guard let element = value as? String,
+                  ScreenplayElement(rawValue: element) != nil else { return }
+            ranges.append(ElementRange(location: range.location, length: range.length, element: element))
+        }
+        elementRanges = ranges
+    }
+
+    func makeAttributedString() throws -> NSAttributedString {
+        guard formatVersion == 1 else {
+            throw CocoaError(.fileReadUnsupportedScheme)
+        }
+        let restored = try NSMutableAttributedString(
+            data: richTextData,
+            options: [.documentType: NSAttributedString.DocumentType.rtfd],
+            documentAttributes: nil
+        )
+        for elementRange in elementRanges {
+            guard ScreenplayElement(rawValue: elementRange.element) != nil,
+                  elementRange.location >= 0,
+                  elementRange.length >= 0,
+                  elementRange.location <= restored.length,
+                  elementRange.length <= restored.length - elementRange.location else { continue }
+            restored.addAttribute(
+                .screenplayElement,
+                value: elementRange.element,
+                range: NSRange(location: elementRange.location, length: elementRange.length)
+            )
+        }
+        return restored
+    }
+}
+
 private struct MongrelScreenplayArchive: Codable {
     struct ElementRange: Codable {
         let location: Int
@@ -1120,8 +1336,9 @@ private struct MongrelScreenplayArchive: Codable {
     let formatVersion: Int
     let richTextData: Data
     let elementRanges: [ElementRange]
+    let pageLayout: DocumentPageLayout?
 
-    init(attributedText: NSAttributedString) throws {
+    init(attributedText: NSAttributedString, pageLayout: DocumentPageLayout = .empty) throws {
         formatVersion = 1
         richTextData = try attributedText.data(
             from: NSRange(location: 0, length: attributedText.length),
@@ -1138,6 +1355,7 @@ private struct MongrelScreenplayArchive: Codable {
             ranges.append(ElementRange(location: range.location, length: range.length, element: element))
         }
         elementRanges = ranges
+        self.pageLayout = pageLayout
     }
 
     func makeAttributedString() throws -> NSAttributedString {
@@ -1171,12 +1389,16 @@ private enum PaginatedDocumentPDFRenderer {
     static func render(
         _ attributedText: NSAttributedString,
         margins: NSSize,
-        showsPageNumbers: Bool
+        fallbackPageNumbers: Bool,
+        title: String,
+        pageLayout: DocumentPageLayout
     ) -> Data? {
         let pageSize = ScreenplayPageLayout.pageSize
+        let topInset = max(margins.height, pageLayout.header.hasRenderableContent ? 64 : margins.height)
+        let bottomInset = max(margins.height, pageLayout.footer.hasRenderableContent ? 64 : margins.height)
         let contentSize = NSSize(
             width: pageSize.width - (margins.width * 2),
-            height: pageSize.height - (margins.height * 2)
+            height: pageSize.height - topInset - bottomInset
         )
         guard contentSize.width > 0, contentSize.height > 0 else { return nil }
 
@@ -1184,7 +1406,7 @@ private enum PaginatedDocumentPDFRenderer {
         let layoutManager = NSLayoutManager()
         textStorage.addLayoutManager(layoutManager)
 
-        var pages: [ScreenplayPDFPageView] = []
+        var containers: [NSTextContainer] = []
         var laidOutGlyphs = 0
 
         repeat {
@@ -1194,13 +1416,7 @@ private enum PaginatedDocumentPDFRenderer {
             layoutManager.ensureLayout(for: container)
 
             let glyphRange = layoutManager.glyphRange(for: container)
-            pages.append(ScreenplayPDFPageView(
-                frame: NSRect(origin: .zero, size: pageSize),
-                layoutManager: layoutManager,
-                textContainer: container,
-                margins: margins,
-                pageNumber: showsPageNumbers ? pages.count + 1 : nil
-            ))
+            containers.append(container)
 
             let nextGlyphLocation = NSMaxRange(glyphRange)
             guard nextGlyphLocation > laidOutGlyphs else { break }
@@ -1208,7 +1424,19 @@ private enum PaginatedDocumentPDFRenderer {
         } while laidOutGlyphs < layoutManager.numberOfGlyphs
 
         let document = PDFDocument()
-        for (index, pageView) in pages.enumerated() {
+        for (index, container) in containers.enumerated() {
+            let pageView = DocumentPDFPageView(
+                frame: NSRect(origin: .zero, size: pageSize),
+                layoutManager: layoutManager,
+                textContainer: container,
+                horizontalMargin: margins.width,
+                contentTopInset: topInset,
+                pageNumber: index + 1,
+                pageCount: containers.count,
+                fallbackPageNumbers: fallbackPageNumbers,
+                title: title,
+                pageLayout: pageLayout
+            )
             let pageData = pageView.dataWithPDF(inside: pageView.bounds)
             guard let page = PDFDocument(data: pageData)?.page(at: 0) else { return nil }
             document.insert(page, at: index)
@@ -1218,23 +1446,38 @@ private enum PaginatedDocumentPDFRenderer {
 }
 
 @MainActor
-private final class ScreenplayPDFPageView: NSView {
+private final class DocumentPDFPageView: NSView {
     private let layoutManager: NSLayoutManager
     private let textContainer: NSTextContainer
-    private let margins: NSSize
-    private let pageNumber: Int?
+    private let horizontalMargin: CGFloat
+    private let contentTopInset: CGFloat
+    private let pageNumber: Int
+    private let pageCount: Int
+    private let fallbackPageNumbers: Bool
+    private let title: String
+    private let pageLayout: DocumentPageLayout
 
     init(
         frame: NSRect,
         layoutManager: NSLayoutManager,
         textContainer: NSTextContainer,
-        margins: NSSize,
-        pageNumber: Int?
+        horizontalMargin: CGFloat,
+        contentTopInset: CGFloat,
+        pageNumber: Int,
+        pageCount: Int,
+        fallbackPageNumbers: Bool,
+        title: String,
+        pageLayout: DocumentPageLayout
     ) {
         self.layoutManager = layoutManager
         self.textContainer = textContainer
-        self.margins = margins
+        self.horizontalMargin = horizontalMargin
+        self.contentTopInset = contentTopInset
         self.pageNumber = pageNumber
+        self.pageCount = pageCount
+        self.fallbackPageNumbers = fallbackPageNumbers
+        self.title = title
+        self.pageLayout = pageLayout
         super.init(frame: frame)
     }
 
@@ -1250,14 +1493,104 @@ private final class ScreenplayPDFPageView: NSView {
         bounds.fill()
 
         let glyphRange = layoutManager.glyphRange(for: textContainer)
-        let origin = NSPoint(x: margins.width, y: margins.height)
+        let origin = NSPoint(x: horizontalMargin, y: contentTopInset)
         layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
         layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
 
-        guard let pageNumber else { return }
+        let shouldDrawFurniture = pageNumber > 1 || pageLayout.showsOnFirstPage
+        if shouldDrawFurniture {
+            draw(pageLayout.header, at: .header)
+            draw(pageLayout.footer, at: .footer)
+        }
+
+        if fallbackPageNumbers,
+           !pageLayout.footer.hasRenderableContent,
+           pageNumber > 1 || pageLayout.showsOnFirstPage {
+            drawFallbackPageNumber()
+        }
+    }
+
+    private func draw(_ band: DocumentPageBand, at location: PageBandLocation) {
+        guard band.hasRenderableContent else { return }
+        let bandHeight: CGFloat = 28
+        let y = location == .header ? 18 : bounds.maxY - bandHeight - 18
+        let fullRect = NSRect(
+            x: horizontalMargin,
+            y: y,
+            width: bounds.width - (horizontalMargin * 2),
+            height: bandHeight
+        )
+
+        var textRect = fullRect
+        if let image = band.image?.image {
+            let imageRect = fittedImageRect(for: image, in: fullRect, alignment: band.alignment)
+            image.draw(
+                in: imageRect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            let reserved = imageRect.width + 8
+            switch band.alignment {
+            case .leading:
+                textRect.origin.x += reserved
+                textRect.size.width -= reserved
+            case .trailing:
+                textRect.size.width -= reserved
+            case .center:
+                textRect = NSRect(x: fullRect.minX, y: fullRect.maxY + 1, width: fullRect.width, height: 14)
+            }
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = band.alignment.textAlignment
+        paragraph.lineBreakMode = .byTruncatingTail
+        let resolved = pageLayout.resolvedText(
+            for: band,
+            title: title,
+            pageNumber: pageNumber,
+            pageCount: pageCount
+        )
+        resolved.draw(
+            with: textRect,
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 9.5, weight: .medium),
+                .foregroundColor: NSColor.darkGray,
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+
+    private func fittedImageRect(
+        for image: NSImage,
+        in availableRect: NSRect,
+        alignment: PageBandAlignment
+    ) -> NSRect {
+        let sourceSize = image.size
+        guard sourceSize.width > 0, sourceSize.height > 0 else { return .zero }
+        let scale = min(availableRect.height / sourceSize.height, 84 / sourceSize.width, 1)
+        let size = NSSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let x: CGFloat
+        switch alignment {
+        case .leading: x = availableRect.minX
+        case .center: x = availableRect.midX - (size.width / 2)
+        case .trailing: x = availableRect.maxX - size.width
+        }
+        return NSRect(
+            x: x,
+            y: availableRect.midY - (size.height / 2),
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func drawFallbackPageNumber() {
         let pageLabel = "\(pageNumber)."
         pageLabel.draw(
-            at: NSPoint(x: bounds.maxX - margins.width + 12, y: 18),
+            at: NSPoint(x: bounds.maxX - horizontalMargin + 12, y: 18),
             withAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
                 .foregroundColor: NSColor.darkGray

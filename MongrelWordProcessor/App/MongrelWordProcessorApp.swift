@@ -71,8 +71,16 @@ private struct WordProcessorCommands: Commands {
             .keyboardShortcut("S", modifiers: [.command, .shift])
 
             Menu("Save As Type") {
+                Button("Mongrel Document (.mongreldoc)") {
+                    session.saveDocumentAs(preferredType: .mongrelDocument)
+                }
+
                 Button("Rich Text (.rtf)") {
                     session.saveDocumentAs(preferredType: .rtf)
+                }
+
+                Button("Rich Text with Attachments (.rtfd)") {
+                    session.saveDocumentAs(preferredType: .rtfd)
                 }
 
                 Button("Microsoft Word (.docx)") {
@@ -128,6 +136,11 @@ private struct WordProcessorCommands: Commands {
                 session.installFontFiles()
             }
 
+            Button("Insert Image...") {
+                session.formattingBridge.insertImageAttachment()
+            }
+            .disabled(session.authoringMode == .code)
+
             Divider()
 
             Button(session.typewriterMode ? "Disable Typewriter Scrolling" : "Enable Typewriter Scrolling") {
@@ -166,6 +179,10 @@ private struct WordProcessorCommands: Commands {
 
             Button("Export RTF") {
                 session.exportAsRTF()
+            }
+
+            Button("Export RTFD with Attachments") {
+                session.exportAsRTFD()
             }
 
             Button("Export Microsoft Word") {

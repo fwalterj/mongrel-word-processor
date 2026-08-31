@@ -56,6 +56,49 @@ final class FormattingBridge: ObservableObject {
         NSSpellChecker.shared.spellingPanel.makeKeyAndOrderFront(nil)
     }
 
+    func insertImageAttachment() {
+        guard let textView else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = DocumentImageSupport.contentTypes
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Insert PNG, JPEG, HEIC, TIFF, GIF, or PDF artwork up to 20 MB."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let imported = try DocumentImageSupport.loadPageImage(from: url)
+            guard let image = imported.image, let textStorage = textView.textStorage else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+
+            let availableWidth = max(160, min(textView.bounds.width - 40, 640))
+            if image.size.width > availableWidth {
+                let scale = availableWidth / image.size.width
+                image.size = NSSize(width: availableWidth, height: image.size.height * scale)
+            }
+
+            let wrapper = FileWrapper(regularFileWithContents: imported.data)
+            wrapper.preferredFilename = imported.filename
+            let attachment = NSTextAttachment(fileWrapper: wrapper)
+            attachment.attachmentCell = NSTextAttachmentCell(imageCell: image)
+            let replacement = NSAttributedString(attachment: attachment)
+            let selectedRange = textView.selectedRange()
+
+            textStorage.beginEditing()
+            textStorage.replaceCharacters(in: selectedRange, with: replacement)
+            textStorage.endEditing()
+            textView.setSelectedRange(NSRange(location: selectedRange.location + replacement.length, length: 0))
+            textView.didChangeText()
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Could not insert image"
+            alert.informativeText = "Choose a valid PNG, JPEG, HEIC, TIFF, GIF, or PDF file no larger than 20 MB."
+            alert.runModal()
+        }
+    }
+
     func focusRange(_ range: NSRange) {
         guard let textView,
               range.location >= 0,

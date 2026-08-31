@@ -150,6 +150,28 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testRTFDPreservesBodyImageAttachments() throws {
+        let imageData = try makePNGData()
+        let wrapper = FileWrapper(regularFileWithContents: imageData)
+        wrapper.preferredFilename = "mark.png"
+        let attachment = NSTextAttachment(fileWrapper: wrapper)
+        attachment.attachmentCell = NSTextAttachmentCell(imageCell: try XCTUnwrap(NSImage(data: imageData)))
+        let source = makeSession()
+        source.attributedText = NSAttributedString(attachment: attachment)
+        let destination = temporaryDirectory.appendingPathComponent("Image.rtfd", isDirectory: true)
+
+        XCTAssertTrue(source.saveDocument(to: destination, type: .rtfd))
+        source.markDirty()
+        XCTAssertTrue(source.saveDocument(to: destination, type: .rtfd))
+
+        let reopened = makeSession()
+        XCTAssertTrue(reopened.openDocument(at: destination))
+        XCTAssertNotNil(
+            reopened.attributedText.attribute(.attachment, at: 0, effectiveRange: nil) as? NSTextAttachment
+        )
+    }
+
+    @MainActor
     func testNewDocumentResetsContentAndMetrics() {
         let session = makeSession()
         session.newScreenplay()
@@ -187,12 +209,87 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(
             openTypeIdentifiers,
             Set([
+                UTType.mongrelDocument.identifier,
                 UTType.mongrelScreenplay.identifier,
+                UTType.rtfd.identifier,
                 UTType.rtf.identifier,
                 UTType.wordDocument.identifier,
                 UTType.plainText.identifier
             ])
         )
+    }
+
+    @MainActor
+    func testNativeDocumentRoundTripPreservesPageLayoutAndBodyAttachment() throws {
+        let source = makeSession()
+        let imageData = try makePNGData()
+        let wrapper = FileWrapper(regularFileWithContents: imageData)
+        wrapper.preferredFilename = "mark.png"
+        let attachment = NSTextAttachment(fileWrapper: wrapper)
+        attachment.attachmentCell = NSTextAttachmentCell(imageCell: try XCTUnwrap(NSImage(data: imageData)))
+        let richText = NSMutableAttributedString(string: "Opening\n")
+        richText.append(NSAttributedString(attachment: attachment))
+        source.attributedText = richText
+        source.pageLayout.header.isEnabled = true
+        source.pageLayout.header.text = "{title}"
+        source.pageLayout.header.image = DocumentPageImage(
+            data: imageData,
+            contentTypeIdentifier: UTType.png.identifier,
+            filename: "mark.png"
+        )
+        source.pageLayout.footer.isEnabled = true
+        source.pageLayout.footer.includesPageNumber = true
+        let destination = temporaryDirectory.appendingPathComponent("Native.mongreldoc")
+
+        XCTAssertTrue(source.saveDocument(to: destination, type: .mongrelDocument))
+
+        let reopened = makeSession()
+        XCTAssertTrue(reopened.openDocument(at: destination))
+        XCTAssertEqual(reopened.authoringMode, .prose)
+        XCTAssertEqual(reopened.pageLayout, source.pageLayout)
+        XCTAssertNotNil(
+            reopened.attributedText.attribute(
+                .attachment,
+                at: reopened.attributedText.length - 1,
+                effectiveRange: nil
+            ) as? NSTextAttachment
+        )
+        XCTAssertFalse(reopened.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testNativeDocumentPreservesScreenplayElementTagsWhenExplicitlySelected() throws {
+        let source = makeSession()
+        source.authoringMode = .screenplay
+        let text = NSMutableAttributedString(string: "INT. LAB - NIGHT\nA monitor waits.\n")
+        text.addAttribute(
+            .screenplayElement,
+            value: ScreenplayElement.sceneHeading.rawValue,
+            range: NSRange(location: 0, length: 17)
+        )
+        source.attributedText = text
+        let destination = temporaryDirectory.appendingPathComponent("Script.mongreldoc")
+
+        XCTAssertTrue(source.saveDocument(to: destination, type: .mongrelDocument))
+
+        let reopened = makeSession()
+        XCTAssertTrue(reopened.openDocument(at: destination))
+        XCTAssertEqual(reopened.authoringMode, .screenplay)
+        XCTAssertEqual(screenplayElement(in: reopened.attributedText, at: 0), .sceneHeading)
+    }
+
+    @MainActor
+    func testNewDocumentClearsPageLayout() throws {
+        let session = makeSession()
+        session.pageLayout.header.isEnabled = true
+        session.pageLayout.header.text = "Private draft"
+        let destination = temporaryDirectory.appendingPathComponent("Configured.mongreldoc")
+        XCTAssertTrue(session.saveDocument(to: destination, type: .mongrelDocument))
+
+        session.newDocument()
+
+        XCTAssertEqual(session.pageLayout, .empty)
+        XCTAssertFalse(session.hasUnsavedChanges)
     }
 
     @MainActor
@@ -343,6 +440,84 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testPDFRendersHeaderFooterFieldsAcrossPages() throws {
+        let session = makeSession()
+        session.title = "Field Test"
+        session.attributedText = NSAttributedString(
+            string: Array(repeating: "A line long enough to paginate cleanly.", count: 260).joined(separator: "\n")
+        )
+        session.pageLayout.header.isEnabled = true
+        session.pageLayout.header.text = "{title}"
+        session.pageLayout.footer.isEnabled = true
+        session.pageLayout.footer.text = "Page {page} / {pages}"
+
+        let pdf = try XCTUnwrap(PDFDocument(data: try XCTUnwrap(session.makePDFData())))
+
+        XCTAssertGreaterThan(pdf.pageCount, 1)
+        XCTAssertTrue(try XCTUnwrap(pdf.page(at: 0)?.string).contains("Field Test"))
+        XCTAssertTrue(try XCTUnwrap(pdf.page(at: 0)?.string).contains("Page 1 / \(pdf.pageCount)"))
+    }
+
+    @MainActor
+    func testPDFCanSuppressPageFurnitureOnFirstPage() throws {
+        let session = makeSession()
+        session.title = "Second Page Header"
+        session.attributedText = NSAttributedString(
+            string: Array(repeating: "Another line for reliable pagination.", count: 260).joined(separator: "\n")
+        )
+        session.pageLayout.header.isEnabled = true
+        session.pageLayout.header.text = "{title}"
+        session.pageLayout.showsOnFirstPage = false
+
+        let pdf = try XCTUnwrap(PDFDocument(data: try XCTUnwrap(session.makePDFData())))
+
+        XCTAssertGreaterThan(pdf.pageCount, 1)
+        XCTAssertFalse(try XCTUnwrap(pdf.page(at: 0)?.string).contains("Second Page Header"))
+        XCTAssertTrue(try XCTUnwrap(pdf.page(at: 1)?.string).contains("Second Page Header"))
+    }
+
+    func testPageFieldsAndAppleFriendlyImageTypes() throws {
+        var layout = DocumentPageLayout.empty
+        layout.footer.isEnabled = true
+        layout.footer.text = "{title} | {page}/{pages}"
+        let resolved = layout.resolvedText(
+            for: layout.footer,
+            title: "Draft",
+            pageNumber: 2,
+            pageCount: 7,
+            date: Date(timeIntervalSince1970: 0)
+        )
+
+        XCTAssertEqual(resolved, "Draft | 2/7")
+        XCTAssertEqual(
+            Set(DocumentImageSupport.contentTypes.map(\.identifier)),
+            Set([UTType.png, .jpeg, .heic, .tiff, .gif, .pdf].map(\.identifier))
+        )
+
+        layout.header.image = DocumentPageImage(
+            data: Data("not an image".utf8),
+            contentTypeIdentifier: UTType.png.identifier,
+            filename: "broken.png"
+        )
+        XCTAssertNil(layout.sanitized.header.image)
+    }
+
+    func testPageImageLoaderAcceptsPNGAndRejectsOversizedFiles() throws {
+        let pngURL = temporaryDirectory.appendingPathComponent("mark.png")
+        try makePNGData().write(to: pngURL)
+
+        let loaded = try DocumentImageSupport.loadPageImage(from: pngURL)
+
+        XCTAssertEqual(loaded.filename, "mark.png")
+        XCTAssertEqual(loaded.contentTypeIdentifier, UTType.png.identifier)
+        XCTAssertNotNil(loaded.image)
+
+        let hugeURL = temporaryDirectory.appendingPathComponent("huge.png")
+        try Data(count: DocumentImageSupport.maximumFileSize + 1).write(to: hugeURL)
+        XCTAssertThrowsError(try DocumentImageSupport.loadPageImage(from: hugeURL))
+    }
+
+    @MainActor
     func testDocumentStatusDistinguishesNewUnsavedAndSaved() {
         let session = makeSession()
         XCTAssertEqual(session.documentStatusLabel, "New")
@@ -445,6 +620,16 @@ final class DocumentSessionTests: XCTestCase {
             return nil
         }
         return ScreenplayElement(rawValue: raw)
+    }
+
+    private func makePNGData() throws -> Data {
+        let image = NSImage(size: NSSize(width: 24, height: 12))
+        image.lockFocus()
+        NSColor.systemBlue.setFill()
+        NSRect(x: 0, y: 0, width: 24, height: 12).fill()
+        image.unlockFocus()
+        let representation = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+        return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
     }
 
     @MainActor
