@@ -34,6 +34,7 @@ final class FormattingBridge: ObservableObject {
 
     /// Set by TextKit2EditorView.Coordinator after the NSTextView is created.
     weak var textView: NSTextView?
+    var documentTextColor: NSColor = .labelColor
 
     // MARK: – Active-state publishers (updated on every selection change)
     @Published private(set) var isBold: Bool = false
@@ -223,7 +224,7 @@ final class FormattingBridge: ObservableObject {
         screenplayAttributes(for: element).forEach { attrs[$0.key] = $0.value }
         tv.typingAttributes = attrs
         tv.defaultParagraphStyle = screenplayStyle(for: element).paragraphStyle
-        tv.insertionPointColor = NSColor(MongrelAppearancePreferences.shared.text)
+        tv.insertionPointColor = documentTextColor
         activeScreenplayElement = element
         screenplaySuggestions = makeScreenplaySuggestions(in: tv, activeElement: element)
     }
@@ -409,9 +410,7 @@ final class FormattingBridge: ObservableObject {
         return [
             .font: style.font,
             .paragraphStyle: style.paragraphStyle,
-            .foregroundColor: MongrelAppearancePreferences.shared.mode == .standard
-                ? NSColor(calibratedWhite: 0.08, alpha: 1)
-                : NSColor(MongrelAppearancePreferences.shared.text),
+            .foregroundColor: documentTextColor,
             .screenplayElement: element.rawValue
         ]
     }

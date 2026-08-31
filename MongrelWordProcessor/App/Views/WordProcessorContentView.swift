@@ -423,7 +423,12 @@ struct WordProcessorContentView: View {
                     .foregroundStyle(DesignTokens.chromeText.opacity(0.88))
             }
             .buttonStyle(.plain)
-            .help("Headers, footers, page fields, and artwork")
+            .disabled(session.authoringMode == .code)
+            .help(
+                session.authoringMode == .code
+                    ? "Page layout is not used in code mode"
+                    : "Page colors, headers, footers, page fields, and artwork"
+            )
 
             Button {
                 session.formattingBridge.insertImageAttachment()
@@ -779,7 +784,9 @@ struct WordProcessorContentView: View {
             codeTabWidth: session.codeTabWidth,
             codeLineWrap: session.codeLineWrap,
             editorZoom: editorZoom,
-            typewriterMode: session.typewriterMode
+            typewriterMode: session.typewriterMode,
+            pageBackgroundColor: session.pageLayout.pageColors.background.nsColor,
+            pageTextColor: session.pageLayout.pageColors.text.nsColor
         )
     }
 
@@ -1055,17 +1062,23 @@ struct WordProcessorContentView: View {
                 )
             } else if session.authoringMode == .screenplay {
                 screenplayPaperBackground
-                if appearance.mode == .standard {
+                if session.pageLayout.palette == .warmPaper || session.pageLayout.palette == .sepia {
                     LinearGradient(
                         colors: [Color(red: 0.84, green: 0.78, blue: 0.62).opacity(0.22), .clear],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
+                } else {
+                    LinearGradient(
+                        colors: [screenplayPaperForeground.opacity(0.035), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 }
             } else {
-                DesignTokens.glassCard
+                Color(nsColor: session.pageLayout.pageColors.background.nsColor)
                 LinearGradient(
-                    colors: [DesignTokens.glassHotSpot.opacity(0.24), .clear],
+                    colors: [Color.white.opacity(0.035), .clear],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -1074,13 +1087,11 @@ struct WordProcessorContentView: View {
     }
 
     private var screenplayPaperBackground: Color {
-        appearance.mode == .standard
-            ? Color(red: 0.97, green: 0.95, blue: 0.89)
-            : appearance.background
+        Color(nsColor: session.pageLayout.pageColors.background.nsColor)
     }
 
     private var screenplayPaperForeground: Color {
-        appearance.mode == .standard ? .black : appearance.text
+        Color(nsColor: session.pageLayout.pageColors.text.nsColor)
     }
 
     private var codeBackground: (Color, Color) {
@@ -1235,7 +1246,7 @@ private struct DocumentPageLayoutView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Page Layout")
                         .font(.system(size: 21, weight: .semibold, design: .rounded))
-                    Text("Headers and footers used by Mongrel documents, PDF export, and print")
+                    Text("Page colors, headers, and footers used by Mongrel documents, PDF export, and print")
                         .font(.caption)
                         .foregroundStyle(DesignTokens.chromeText.opacity(0.56))
                 }
@@ -1249,6 +1260,7 @@ private struct DocumentPageLayoutView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
+                    pageColorControls
                     pagePreview
 
                     PageBandEditor(
@@ -1277,7 +1289,7 @@ private struct DocumentPageLayoutView: View {
                         Text("Use {title}, {page}, {pages}, or {date} in either text field.")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(DesignTokens.chromeText.opacity(0.74))
-                        Text("RTFD retains embedded body images. RTF and DOCX retain styled text but may discard attachments. None preserve Mongrel page furniture; use .mongreldoc for editable fidelity or PDF for final delivery.")
+                        Text("RTFD retains embedded body images. RTF and DOCX retain styled text but may discard attachments. None preserve Mongrel page colors or furniture; use .mongreldoc for editable fidelity or PDF for final delivery.")
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(DesignTokens.chromeText.opacity(0.52))
                             .fixedSize(horizontal: false, vertical: true)
@@ -1289,15 +1301,125 @@ private struct DocumentPageLayoutView: View {
                 .padding(20)
             }
         }
-        .frame(width: 680, height: 760)
+        .frame(width: 720, height: 820)
         .background(DesignTokens.glassDeep)
         .foregroundStyle(DesignTokens.chromeText)
+    }
+
+    private var pageColorControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Page colors")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Text("Applied to the document canvas, body text, PDF, and print.")
+                        .font(.caption)
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.54))
+                }
+                Spacer()
+                Text(String(format: "%.1f:1", session.pageLayout.pageColors.contrastRatio))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(
+                        session.pageLayout.pageColors.contrastRatio >= 7
+                            ? DesignTokens.accent
+                            : (session.pageLayout.pageColors.contrastRatio >= 4.5 ? DesignTokens.chromeText : .orange)
+                    )
+            }
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                ForEach(DocumentPagePalette.allCases) { palette in
+                    Button {
+                        session.applyPagePalette(palette)
+                    } label: {
+                        let colors = palette.colors(
+                            customBackground: session.pageLayout.customPageBackground,
+                            customText: session.pageLayout.customPageText
+                        )
+                        VStack(spacing: 6) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(Color(nsColor: colors.background.nsColor))
+                                Text("Aa")
+                                    .font(.system(size: 15, weight: .bold, design: .serif))
+                                    .foregroundStyle(Color(nsColor: colors.text.nsColor))
+                            }
+                            .frame(height: 42)
+                            Text(palette.title)
+                                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                                .lineLimit(1)
+                        }
+                        .padding(7)
+                        .background(DesignTokens.glassCard.opacity(0.54), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(
+                                    session.pageLayout.palette == palette
+                                        ? DesignTokens.accent
+                                        : DesignTokens.borderRim.opacity(0.55),
+                                    lineWidth: session.pageLayout.palette == palette ? 1.4 : 0.6
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if session.pageLayout.palette == .custom {
+                HStack(spacing: 18) {
+                    ColorPicker("Background", selection: customBackgroundBinding, supportsOpacity: false)
+                    ColorPicker("Text", selection: customTextBinding, supportsOpacity: false)
+                }
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+            }
+
+            if session.pageLayout.pageColors.contrastRatio < 4.5 {
+                Label("This pairing is difficult to read. Aim for at least 4.5:1.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(16)
+        .background(DesignTokens.glassElevated.opacity(0.60), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(DesignTokens.borderRim.opacity(0.45), lineWidth: 0.6))
+    }
+
+    private var customBackgroundBinding: Binding<Color> {
+        Binding(
+            get: { Color(nsColor: session.pageLayout.customPageBackground.nsColor) },
+            set: { color in
+                session.updateCustomPageColors(
+                    background: documentColor(from: color, fallback: session.pageLayout.customPageBackground),
+                    text: session.pageLayout.customPageText
+                )
+            }
+        )
+    }
+
+    private var customTextBinding: Binding<Color> {
+        Binding(
+            get: { Color(nsColor: session.pageLayout.customPageText.nsColor) },
+            set: { color in
+                session.updateCustomPageColors(
+                    background: session.pageLayout.customPageBackground,
+                    text: documentColor(from: color, fallback: session.pageLayout.customPageText)
+                )
+            }
+        )
+    }
+
+    private func documentColor(from color: Color, fallback: DocumentRGBColor) -> DocumentRGBColor {
+        guard let converted = NSColor(color).usingColorSpace(.sRGB) else { return fallback }
+        return DocumentRGBColor(
+            red: Double(converted.redComponent),
+            green: Double(converted.greenComponent),
+            blue: Double(converted.blueComponent)
+        )
     }
 
     private var pagePreview: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(red: 0.97, green: 0.96, blue: 0.92))
+                .fill(Color(nsColor: session.pageLayout.pageColors.background.nsColor))
                 .shadow(color: Color.black.opacity(0.16), radius: 18, y: 8)
 
             VStack(spacing: 0) {
@@ -1308,7 +1430,7 @@ private struct DocumentPageLayoutView: View {
                     RoundedRectangle(cornerRadius: 2).frame(width: 205, height: 5)
                     RoundedRectangle(cornerRadius: 2).frame(width: 220, height: 5)
                 }
-                .foregroundStyle(Color.black.opacity(0.15))
+                .foregroundStyle(Color(nsColor: session.pageLayout.pageColors.text.nsColor).opacity(0.16))
                 Spacer()
                 previewBand(session.pageLayout.footer, pageNumber: 1, pageCount: 3)
             }
@@ -1336,7 +1458,7 @@ private struct DocumentPageLayoutView: View {
                 .font(.system(size: 7.5, weight: .medium, design: .rounded))
                 .lineLimit(1)
             }
-            .foregroundStyle(Color.black.opacity(0.66))
+            .foregroundStyle(Color(nsColor: session.pageLayout.pageColors.text.nsColor).opacity(0.72))
             .frame(maxWidth: .infinity, alignment: swiftUIAlignment(for: band.alignment))
         } else {
             Color.clear.frame(height: 18)

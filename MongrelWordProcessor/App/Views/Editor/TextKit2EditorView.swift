@@ -3,6 +3,12 @@ import AppKit
 import SharedFoundation
 
 private final class ScreenplayTextView: NSTextView {
+    var pageBackgroundColor = NSColor(red: 0.97, green: 0.95, blue: 0.89, alpha: 1) {
+        didSet { needsDisplay = true }
+    }
+    var pageTextColor = NSColor(calibratedWhite: 0.08, alpha: 1) {
+        didSet { needsDisplay = true }
+    }
     var isScreenplayPaginationActive: Bool = false {
         didSet {
             guard isScreenplayPaginationActive != oldValue else { return }
@@ -27,16 +33,9 @@ private final class ScreenplayTextView: NSTextView {
     }
 
     private func drawScreenplayPages(in dirtyRect: NSRect) {
-        let appearance = MongrelAppearancePreferences.shared
-        let pageColor = appearance.mode == .standard
-            ? NSColor(calibratedWhite: 0.995, alpha: 1)
-            : NSColor(appearance.background)
-        let seamColor = appearance.mode == .standard
-            ? NSColor(calibratedWhite: 0.84, alpha: 1)
-            : NSColor(appearance.text).withAlphaComponent(0.62)
-        let numberColor = appearance.mode == .standard
-            ? NSColor(calibratedWhite: 0.38, alpha: 1)
-            : NSColor(appearance.text).withAlphaComponent(0.78)
+        let pageColor = pageBackgroundColor
+        let seamColor = pageTextColor.withAlphaComponent(0.28)
+        let numberColor = pageTextColor.withAlphaComponent(0.72)
         let pageWidth = ScreenplayPageLayout.pageSize.width
         let pageHeight = ScreenplayPageLayout.pageSize.height
 
@@ -92,6 +91,8 @@ struct TextKit2EditorView: NSViewRepresentable {
     let codeLineWrap: Bool
     let editorZoom: CGFloat
     let typewriterMode: Bool
+    let pageBackgroundColor: NSColor
+    let pageTextColor: NSColor
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -146,7 +147,10 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.lastScreenplayElement = screenplayElement
         context.coordinator.lastZoom = editorZoom
         context.coordinator.lastTypewriterMode = typewriterMode
+        context.coordinator.lastPageBackgroundColor = pageBackgroundColor
+        context.coordinator.lastPageTextColor = pageTextColor
         bridge.textView = textView
+        bridge.documentTextColor = pageTextColor
         context.coordinator.applyEditorMode(authoringMode, to: textView)
         context.coordinator.applyCompanionSpellings(to: textView, fullDocument: true)
         bridge.updateFormattingState(from: textView)
@@ -158,6 +162,7 @@ struct TextKit2EditorView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
         guard !context.coordinator.isApplyingEdit else { return }
+        context.coordinator.parent = self
 
         if !textView.attributedString().isEqual(to: attributedText) {
             context.coordinator.isApplyingEdit = true
@@ -169,6 +174,14 @@ struct TextKit2EditorView: NSViewRepresentable {
             context.coordinator.lastMode = authoringMode
             context.coordinator.applyEditorMode(authoringMode, to: textView)
             context.coordinator.updateScreenplayPagination(for: textView)
+        }
+
+        if !context.coordinator.lastPageBackgroundColor.isEqual(pageBackgroundColor)
+            || !context.coordinator.lastPageTextColor.isEqual(pageTextColor) {
+            context.coordinator.lastPageBackgroundColor = pageBackgroundColor
+            context.coordinator.lastPageTextColor = pageTextColor
+            bridge.documentTextColor = pageTextColor
+            context.coordinator.applyPagePalette(to: textView)
         }
 
         if context.coordinator.lastScreenplayElement != screenplayElement {
@@ -230,6 +243,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         var lastScreenplayElement: ScreenplayElement = .action
         var lastZoom: CGFloat = 1
         var lastTypewriterMode: Bool = false
+        var lastPageBackgroundColor: NSColor = .clear
+        var lastPageTextColor: NSColor = .clear
         var ignoredCompanionWords: Set<String> = []
 
         init(_ parent: TextKit2EditorView) {
@@ -337,14 +352,12 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isAutomaticTextReplacementEnabled = true
                 textView.isAutomaticSpellingCorrectionEnabled = true
                 textView.isContinuousSpellCheckingEnabled = true
-                textView.drawsBackground = false
+                textView.drawsBackground = true
+                textView.backgroundColor = parent.pageBackgroundColor
                 applyStandardDocumentMetrics(to: textView)
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.lineHeightMultiple = 1.35
-                let appearance = MongrelAppearancePreferences.shared
-                let textColor = appearance.mode == .standard
-                    ? NSColor.labelColor
-                    : NSColor(appearance.text)
+                let textColor = parent.pageTextColor
                 textView.typingAttributes = [
                     .font: NSFont.systemFont(ofSize: 14),
                     .foregroundColor: textColor,
@@ -376,13 +389,24 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isAutomaticTextReplacementEnabled = false
                 textView.isAutomaticSpellingCorrectionEnabled = true
                 textView.isContinuousSpellCheckingEnabled = true
-                let appearance = MongrelAppearancePreferences.shared
                 textView.drawsBackground = true
-                textView.backgroundColor = appearance.mode == .standard
-                    ? NSColor(red: 0.97, green: 0.95, blue: 0.89, alpha: 1)
-                    : NSColor(appearance.background)
+                textView.backgroundColor = parent.pageBackgroundColor
                 applyScreenplayPageMetrics(to: textView)
                 parent.bridge.configureTypingAttributes(for: parent.screenplayElement, in: textView)
+            }
+            applyPagePalette(to: textView)
+        }
+
+        func applyPagePalette(to textView: NSTextView) {
+            guard parent.authoringMode != .code else { return }
+            parent.bridge.documentTextColor = parent.pageTextColor
+            textView.drawsBackground = true
+            textView.backgroundColor = parent.pageBackgroundColor
+            textView.insertionPointColor = parent.pageTextColor
+            textView.typingAttributes[.foregroundColor] = parent.pageTextColor
+            if let screenplayTextView = textView as? ScreenplayTextView {
+                screenplayTextView.pageBackgroundColor = parent.pageBackgroundColor
+                screenplayTextView.pageTextColor = parent.pageTextColor
             }
         }
 

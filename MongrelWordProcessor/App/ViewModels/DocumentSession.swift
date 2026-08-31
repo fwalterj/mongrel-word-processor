@@ -557,6 +557,7 @@ final class DocumentSession: ObservableObject {
                 hasUnsavedChanges = false
             }
             invalidateLanguageToolResults()
+            formattingBridge.documentTextColor = pageLayout.pageColors.text.nsColor
             updateMetrics()
             trackRecent(url)
 
@@ -575,14 +576,14 @@ final class DocumentSession: ObservableObject {
     }
 
     func saveDocument() {
-        if pageLayout.hasRenderableContent,
+        if pageLayout.hasNativeOnlyFeatures,
            currentURL != nil,
            currentType != .mongrelDocument,
            currentType != .mongrelScreenplay {
             let alert = NSAlert()
             alert.alertStyle = .informational
             alert.messageText = "Preserve page layout?"
-            alert.informativeText = "RTF, RTFD, Word, and plain-text exports do not retain Mongrel headers and footers. Save a native Mongrel document to keep them editable."
+            alert.informativeText = "RTF, RTFD, Word, and plain-text exports do not retain Mongrel page colors, headers, or footers. Save a native Mongrel document to keep them editable."
             alert.addButton(withTitle: "Save as Mongrel Document")
             alert.addButton(withTitle: "Save Without Page Layout")
             alert.addButton(withTitle: "Cancel")
@@ -748,6 +749,38 @@ final class DocumentSession: ObservableObject {
         switch location {
         case .header: pageLayout.header.image = nil
         case .footer: pageLayout.footer.image = nil
+        }
+    }
+
+    func applyPagePalette(_ palette: DocumentPagePalette) {
+        pageLayout.palette = palette
+        recolorDocumentTextForPagePalette(shouldMarkDirty: true)
+    }
+
+    func updateCustomPageColors(background: DocumentRGBColor, text: DocumentRGBColor) {
+        pageLayout.customPageBackground = background
+        pageLayout.customPageText = text
+        pageLayout.palette = .custom
+        recolorDocumentTextForPagePalette(shouldMarkDirty: true)
+    }
+
+    private func recolorDocumentTextForPagePalette(shouldMarkDirty: Bool) {
+        guard authoringMode != .code else { return }
+        formattingBridge.documentTextColor = pageLayout.pageColors.text.nsColor
+        guard attributedText.length > 0 else {
+            if shouldMarkDirty { hasUnsavedChanges = true }
+            return
+        }
+
+        let recolored = NSMutableAttributedString(attributedString: attributedText)
+        recolored.addAttribute(
+            .foregroundColor,
+            value: pageLayout.pageColors.text.nsColor,
+            range: NSRange(location: 0, length: recolored.length)
+        )
+        attributedText = recolored
+        if shouldMarkDirty {
+            markDirty()
         }
     }
 
@@ -1402,7 +1435,15 @@ private enum PaginatedDocumentPDFRenderer {
         )
         guard contentSize.width > 0, contentSize.height > 0 else { return nil }
 
-        let textStorage = NSTextStorage(attributedString: attributedText)
+        let printableText = NSMutableAttributedString(attributedString: attributedText)
+        if printableText.length > 0 {
+            printableText.addAttribute(
+                .foregroundColor,
+                value: pageLayout.pageColors.text.nsColor,
+                range: NSRange(location: 0, length: printableText.length)
+            )
+        }
+        let textStorage = NSTextStorage(attributedString: printableText)
         let layoutManager = NSLayoutManager()
         textStorage.addLayoutManager(layoutManager)
 
@@ -1489,7 +1530,7 @@ private final class DocumentPDFPageView: NSView {
     override var isFlipped: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.white.setFill()
+        pageLayout.pageColors.background.nsColor.setFill()
         bounds.fill()
 
         let glyphRange = layoutManager.glyphRange(for: textContainer)
@@ -1558,7 +1599,7 @@ private final class DocumentPDFPageView: NSView {
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
             attributes: [
                 .font: NSFont.systemFont(ofSize: 9.5, weight: .medium),
-                .foregroundColor: NSColor.darkGray,
+                .foregroundColor: pageLayout.pageColors.text.nsColor.withAlphaComponent(0.78),
                 .paragraphStyle: paragraph
             ]
         )
@@ -1593,7 +1634,7 @@ private final class DocumentPDFPageView: NSView {
             at: NSPoint(x: bounds.maxX - horizontalMargin + 12, y: 18),
             withAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-                .foregroundColor: NSColor.darkGray
+                .foregroundColor: pageLayout.pageColors.text.nsColor.withAlphaComponent(0.78)
             ]
         )
     }

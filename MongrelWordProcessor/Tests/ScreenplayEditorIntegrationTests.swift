@@ -66,7 +66,15 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
             codeTabWidth: 4,
             codeLineWrap: true,
             editorZoom: 1,
-            typewriterMode: false
+            typewriterMode: false,
+            pageBackgroundColor: DocumentPagePalette.warmPaper.colors(
+                customBackground: DocumentRGBColor(hex: 0),
+                customText: DocumentRGBColor(hex: 0)
+            ).background.nsColor,
+            pageTextColor: DocumentPagePalette.warmPaper.colors(
+                customBackground: DocumentRGBColor(hex: 0),
+                customText: DocumentRGBColor(hex: 0)
+            ).text.nsColor
         )
         let coordinator = editor.makeCoordinator()
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
@@ -83,11 +91,7 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
     }
 
     func testContrastScreenplayUsesMatchingBlackPageAndWhiteText() {
-        let appearance = MongrelAppearancePreferences.shared
-        let originalMode = appearance.mode
-        defer { appearance.mode = originalMode }
-        appearance.mode = .contrast
-        let harness = makeHarness()
+        let harness = makeHarness(pagePalette: .contrast)
 
         harness.coordinator.applyEditorMode(.screenplay, to: harness.textView)
 
@@ -101,8 +105,8 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         let appearance = MongrelAppearancePreferences.shared
         let originalMode = appearance.mode
         defer { appearance.mode = originalMode }
-        appearance.mode = .standard
-        let harness = makeHarness()
+        appearance.mode = .contrast
+        let harness = makeHarness(pagePalette: .warmPaper)
 
         harness.coordinator.applyEditorMode(.screenplay, to: harness.textView)
 
@@ -111,14 +115,26 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
             return XCTFail("Ink color could not be converted to RGB")
         }
         XCTAssertLessThan(ink.redComponent, 0.15)
-        XCTAssertEqual(ink.redComponent, ink.greenComponent, accuracy: 0.001)
-        XCTAssertEqual(ink.greenComponent, ink.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(ink.redComponent, 24.0 / 255.0, accuracy: 0.001)
+        XCTAssertEqual(ink.greenComponent, 22.0 / 255.0, accuracy: 0.001)
+        XCTAssertEqual(ink.blueComponent, 18.0 / 255.0, accuracy: 0.001)
         guard let background = harness.textView.backgroundColor.usingColorSpace(.deviceRGB) else {
             return XCTFail("Page background could not be converted to RGB")
         }
         XCTAssertGreaterThan(background.redComponent, 0.9)
         XCTAssertGreaterThan(background.greenComponent, 0.9)
         XCTAssertGreaterThan(background.blueComponent, 0.8)
+    }
+
+    func testBuiltInLayoutPalettesMeetEnhancedContrast() {
+        let appearance = MongrelAppearancePreferences.shared
+        let originalMode = appearance.mode
+        defer { appearance.mode = originalMode }
+
+        for mode in MongrelAppearanceMode.allCases where mode != .custom {
+            appearance.mode = mode
+            XCTAssertGreaterThanOrEqual(appearance.contrastRatio, 7, mode.title)
+        }
     }
 
     func testMagnifiedCanvasKeepsTheDocumentWidthVisible() {
@@ -178,6 +194,7 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
 
     private func makeHarness(
         authoringMode: AuthoringMode = .screenplay,
+        pagePalette: DocumentPagePalette = .warmPaper,
         onElementChange: @escaping (ScreenplayElement) -> Void = { _ in }
     ) -> (
         coordinator: TextKit2EditorView.Coordinator,
@@ -186,6 +203,10 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
     ) {
         var attributedText = NSAttributedString(string: "")
         let bridge = FormattingBridge()
+        let pageColors = pagePalette.colors(
+            customBackground: DocumentRGBColor(hex: 0x121820),
+            customText: DocumentRGBColor(hex: 0xF2F5F7)
+        )
         let editor = TextKit2EditorView(
             attributedText: Binding(
                 get: { attributedText },
@@ -204,7 +225,9 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
             codeTabWidth: 4,
             codeLineWrap: true,
             editorZoom: 1,
-            typewriterMode: false
+            typewriterMode: false,
+            pageBackgroundColor: pageColors.background.nsColor,
+            pageTextColor: pageColors.text.nsColor
         )
         let coordinator = editor.makeCoordinator()
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))

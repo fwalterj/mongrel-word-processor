@@ -3,14 +3,24 @@ import SwiftUI
 public enum MongrelAppearanceMode: String, CaseIterable, Identifiable {
     case standard
     case contrast
+    case graphite
+    case pine
+    case oxblood
+    case daylight
+    case parchment
     case custom
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .standard: return "Standard"
+        case .standard: return "Mongrel Night"
         case .contrast: return "Contrast"
+        case .graphite: return "Graphite"
+        case .pine: return "Pine"
+        case .oxblood: return "Oxblood"
+        case .daylight: return "Daylight"
+        case .parchment: return "Parchment"
         case .custom: return "Custom"
         }
     }
@@ -36,37 +46,53 @@ public final class MongrelAppearancePreferences: ObservableObject, @unchecked Se
     @Published public var textBrightness: Double { didSet { save(textBrightness, key: Self.textBrightnessKey) } }
 
     public var background: Color {
-        switch mode {
-        case .standard:
-            return Color(hue: 222 / 360, saturation: 0.42, brightness: 0.05)
-        case .contrast:
-            return Color(red: 0, green: 0, blue: 0)
-        case .custom:
-            return Color(hue: backgroundHue, saturation: backgroundSaturation, brightness: backgroundBrightness)
-        }
+        let value = effectiveBackgroundHSV
+        return Color(hue: value.h, saturation: value.s, brightness: value.v)
     }
 
     public var text: Color {
-        switch mode {
-        case .standard:
-            return Color(hue: 222 / 360, saturation: 0.10, brightness: 0.88)
-        case .contrast:
-            return .white
-        case .custom:
-            return Color(hue: textHue, saturation: textSaturation, brightness: textBrightness)
-        }
+        let value = effectiveTextHSV
+        return Color(hue: value.h, saturation: value.s, brightness: value.v)
     }
 
     public var contrastRatio: Double {
-        let backgroundRGB = Self.hsvToRGB(h: mode == .contrast ? 0 : backgroundHue,
-                                          s: mode == .contrast ? 0 : backgroundSaturation,
-                                          v: mode == .contrast ? 0 : backgroundBrightness)
-        let textRGB = Self.hsvToRGB(h: mode == .contrast ? 0 : textHue,
-                                    s: mode == .contrast ? 0 : textSaturation,
-                                    v: mode == .contrast ? 1 : textBrightness)
+        let background = effectiveBackgroundHSV
+        let foreground = effectiveTextHSV
+        let backgroundRGB = Self.hsvToRGB(h: background.h, s: background.s, v: background.v)
+        let textRGB = Self.hsvToRGB(h: foreground.h, s: foreground.s, v: foreground.v)
         let a = Self.relativeLuminance(backgroundRGB)
         let b = Self.relativeLuminance(textRGB)
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    var effectiveBackgroundHSV: (h: Double, s: Double, v: Double) {
+        switch mode {
+        case .standard: return (222 / 360, 0.42, 0.05)
+        case .contrast: return (0, 0, 0)
+        case .graphite: return (210 / 360, 0.12, 0.10)
+        case .pine: return (151 / 360, 0.62, 0.12)
+        case .oxblood: return (351 / 360, 0.68, 0.16)
+        case .daylight: return (205 / 360, 0.08, 0.96)
+        case .parchment: return (39 / 360, 0.18, 0.94)
+        case .custom: return (backgroundHue, backgroundSaturation, backgroundBrightness)
+        }
+    }
+
+    var effectiveTextHSV: (h: Double, s: Double, v: Double) {
+        switch mode {
+        case .standard: return (222 / 360, 0.10, 0.88)
+        case .contrast: return (0, 0, 1)
+        case .graphite: return (205 / 360, 0.06, 0.95)
+        case .pine: return (52 / 360, 0.15, 0.96)
+        case .oxblood: return (24 / 360, 0.16, 0.98)
+        case .daylight: return (215 / 360, 0.28, 0.16)
+        case .parchment: return (28 / 360, 0.38, 0.18)
+        case .custom: return (textHue, textSaturation, textBrightness)
+        }
+    }
+
+    var preferredColorScheme: ColorScheme {
+        effectiveBackgroundHSV.v > 0.58 ? .light : .dark
     }
 
     private init(defaults: UserDefaults = .standard) {
@@ -114,13 +140,42 @@ public struct MongrelAppearanceSettingsView: View {
 
     public var body: some View {
         Form {
-            Section("Viewing mode") {
-                Picker("Viewing mode", selection: $appearance.mode) {
+            Section("Layout palette") {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     ForEach(MongrelAppearanceMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                        Button {
+                            appearance.mode = mode
+                        } label: {
+                            HStack(spacing: 10) {
+                                ZStack {
+                                    Circle().fill(color(for: mode, foreground: false))
+                                    Text("Aa")
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .foregroundStyle(color(for: mode, foreground: true))
+                                }
+                                .frame(width: 34, height: 34)
+                                Text(mode.title)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                Spacer(minLength: 0)
+                                if appearance.mode == mode {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                            }
+                            .padding(9)
+                            .background(
+                                appearance.mode == mode
+                                    ? DesignTokens.hoverBloom
+                                    : DesignTokens.glassCard.opacity(0.55),
+                                in: RoundedRectangle(cornerRadius: 10)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(appearance.mode == mode ? DesignTokens.glassBorder : DesignTokens.borderRim)
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .pickerStyle(.segmented)
 
                 Text(modeDescription)
                     .font(.caption)
@@ -167,7 +222,7 @@ public struct MongrelAppearanceSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 460, minHeight: 520)
+        .frame(minWidth: 520, minHeight: 650)
         .background(DesignTokens.glassDeep.ignoresSafeArea())
         .foregroundStyle(DesignTokens.chromeText)
         .tint(DesignTokens.accent)
@@ -175,10 +230,42 @@ public struct MongrelAppearanceSettingsView: View {
 
     private var modeDescription: String {
         switch appearance.mode {
-        case .standard: return "The app's original deep-glass palette."
+        case .standard: return "The original deep-navy Mongrel layout."
         case .contrast: return "Pure black surfaces with blooming white text, borders, and active cues."
+        case .graphite: return "Neutral near-black surfaces with cool, pale lettering."
+        case .pine: return "Deep green surfaces with warm cream lettering."
+        case .oxblood: return "Near-black red surfaces with restrained rose-white lettering."
+        case .daylight: return "Cool light surfaces with dark blue-charcoal lettering."
+        case .parchment: return "Warm light surfaces with dark brown lettering."
         case .custom: return "Build a personal palette with independent background and text controls."
         }
+    }
+
+    private func color(for mode: MongrelAppearanceMode, foreground: Bool) -> Color {
+        if mode == .custom {
+            return foreground
+                ? Color(hue: appearance.textHue, saturation: appearance.textSaturation, brightness: appearance.textBrightness)
+                : Color(hue: appearance.backgroundHue, saturation: appearance.backgroundSaturation, brightness: appearance.backgroundBrightness)
+        }
+        let values: (h: Double, s: Double, v: Double)
+        switch (mode, foreground) {
+        case (.standard, false): values = (222 / 360, 0.42, 0.05)
+        case (.standard, true): values = (222 / 360, 0.10, 0.88)
+        case (.contrast, false): values = (0, 0, 0)
+        case (.contrast, true): values = (0, 0, 1)
+        case (.graphite, false): values = (210 / 360, 0.12, 0.10)
+        case (.graphite, true): values = (205 / 360, 0.06, 0.95)
+        case (.pine, false): values = (151 / 360, 0.62, 0.12)
+        case (.pine, true): values = (52 / 360, 0.15, 0.96)
+        case (.oxblood, false): values = (351 / 360, 0.68, 0.16)
+        case (.oxblood, true): values = (24 / 360, 0.16, 0.98)
+        case (.daylight, false): values = (205 / 360, 0.08, 0.96)
+        case (.daylight, true): values = (215 / 360, 0.28, 0.16)
+        case (.parchment, false): values = (39 / 360, 0.18, 0.94)
+        case (.parchment, true): values = (28 / 360, 0.38, 0.18)
+        case (.custom, _): values = (0, 0, foreground ? 1 : 0)
+        }
+        return Color(hue: values.h, saturation: values.s, brightness: values.v)
     }
 
     private func colorControls(
@@ -230,7 +317,7 @@ private struct MongrelAppearanceModifier: ViewModifier {
         content
             .background(DesignTokens.glassDeep.ignoresSafeArea())
             .tint(DesignTokens.accent)
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(appearance.preferredColorScheme)
             .shadow(color: appearance.mode == .contrast ? .white.opacity(0.18) : .clear, radius: 2)
     }
 }

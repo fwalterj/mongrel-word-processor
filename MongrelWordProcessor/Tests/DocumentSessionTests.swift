@@ -59,10 +59,10 @@ final class DocumentSessionTests: XCTestCase {
 
         let reopened = makeSession()
         XCTAssertTrue(reopened.openDocument(at: destination))
-        XCTAssertEqual(
-            reopened.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-            NSColor.labelColor
+        let reopenedColor = try XCTUnwrap(
+            reopened.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         )
+        assertColor(reopenedColor, matches: .labelColor)
     }
 
     @MainActor
@@ -88,6 +88,11 @@ final class DocumentSessionTests: XCTestCase {
             value: NSFont.boldSystemFont(ofSize: 18),
             range: NSRange(location: 0, length: 4)
         )
+        text.addAttribute(
+            .foregroundColor,
+            value: NSColor.systemRed,
+            range: NSRange(location: 5, length: 7)
+        )
         source.attributedText = text
         source.markDirty()
 
@@ -100,6 +105,16 @@ final class DocumentSessionTests: XCTestCase {
             try XCTUnwrap(reopened.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
                 .fontDescriptor.symbolicTraits.contains(.bold)
         )
+        let reopenedRed = try XCTUnwrap(
+            reopened.attributedText.attribute(.foregroundColor, at: 6, effectiveRange: nil) as? NSColor
+        )
+        guard let reopenedRGB = reopenedRed.usingColorSpace(.sRGB),
+              let expectedRGB = NSColor.systemRed.usingColorSpace(.sRGB) else {
+            return XCTFail("RTF colors could not be converted to sRGB")
+        }
+        XCTAssertEqual(reopenedRGB.redComponent, expectedRGB.redComponent, accuracy: 0.01)
+        XCTAssertEqual(reopenedRGB.greenComponent, expectedRGB.greenComponent, accuracy: 0.01)
+        XCTAssertEqual(reopenedRGB.blueComponent, expectedRGB.blueComponent, accuracy: 0.01)
         XCTAssertFalse(reopened.hasUnsavedChanges)
     }
 
@@ -239,6 +254,7 @@ final class DocumentSessionTests: XCTestCase {
         )
         source.pageLayout.footer.isEnabled = true
         source.pageLayout.footer.includesPageNumber = true
+        source.applyPagePalette(.midnight)
         let destination = temporaryDirectory.appendingPathComponent("Native.mongreldoc")
 
         XCTAssertTrue(source.saveDocument(to: destination, type: .mongrelDocument))
@@ -502,6 +518,83 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertNil(layout.sanitized.header.image)
     }
 
+    func testBuiltInPagePalettesAreReadableAndIncludeLightAndDarkOptions() {
+        var lightBackgrounds = 0
+        var darkBackgrounds = 0
+
+        for palette in DocumentPagePalette.allCases where palette != .custom {
+            let colors = palette.colors(
+                customBackground: DocumentRGBColor(hex: 0),
+                customText: DocumentRGBColor(hex: 0xffffff)
+            )
+            XCTAssertGreaterThanOrEqual(colors.contrastRatio, 7, palette.title)
+            if colors.background.relativeLuminance > colors.text.relativeLuminance {
+                lightBackgrounds += 1
+            } else {
+                darkBackgrounds += 1
+            }
+        }
+
+        XCTAssertGreaterThanOrEqual(lightBackgrounds, 3)
+        XCTAssertGreaterThanOrEqual(darkBackgrounds, 3)
+    }
+
+    func testLegacyPageLayoutDecodingDefaultsToWarmPaper() throws {
+        struct LegacyPageLayout: Encodable {
+            let header = DocumentPageBand(text: "Legacy")
+            let footer = DocumentPageBand(alignment: .center, includesPageNumber: true)
+            let showsOnFirstPage = false
+        }
+
+        let decoded = try JSONDecoder().decode(
+            DocumentPageLayout.self,
+            from: JSONEncoder().encode(LegacyPageLayout())
+        )
+
+        XCTAssertEqual(decoded.palette, .warmPaper)
+        XCTAssertEqual(decoded.header.text, "Legacy")
+        XCTAssertFalse(decoded.showsOnFirstPage)
+    }
+
+    func testDecodedDocumentColorsAreClampedToValidRGBChannels() throws {
+        let decoded = try JSONDecoder().decode(
+            DocumentRGBColor.self,
+            from: Data(#"{"red":-0.25,"green":0.5,"blue":1.4}"#.utf8)
+        )
+
+        XCTAssertEqual(decoded.red, 0)
+        XCTAssertEqual(decoded.green, 0.5)
+        XCTAssertEqual(decoded.blue, 1)
+    }
+
+    func testUnknownFuturePagePaletteFallsBackWithoutRejectingDocument() throws {
+        let data = Data(
+            #"{"header":{"isEnabled":false,"text":"","alignment":"leading","includesPageNumber":false},"footer":{"isEnabled":false,"text":"","alignment":"center","includesPageNumber":true},"showsOnFirstPage":true,"palette":"futurePalette"}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(DocumentPageLayout.self, from: data)
+
+        XCTAssertEqual(decoded.palette, .warmPaper)
+    }
+
+    @MainActor
+    func testApplyingPagePaletteRecolorsExistingTextAndMarksDocumentDirty() throws {
+        let session = makeSession()
+        session.attributedText = NSAttributedString(
+            string: "Palette target",
+            attributes: [.foregroundColor: NSColor.systemRed]
+        )
+
+        session.applyPagePalette(.forest)
+
+        XCTAssertEqual(session.pageLayout.palette, .forest)
+        XCTAssertTrue(session.hasUnsavedChanges)
+        let color = try XCTUnwrap(
+            session.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        )
+        assertColor(color, matches: session.pageLayout.pageColors.text)
+    }
+
     func testPageImageLoaderAcceptsPNGAndRejectsOversizedFiles() throws {
         let pngURL = temporaryDirectory.appendingPathComponent("mark.png")
         try makePNGData().write(to: pngURL)
@@ -515,6 +608,21 @@ final class DocumentSessionTests: XCTestCase {
         let hugeURL = temporaryDirectory.appendingPathComponent("huge.png")
         try Data(count: DocumentImageSupport.maximumFileSize + 1).write(to: hugeURL)
         XCTAssertThrowsError(try DocumentImageSupport.loadPageImage(from: hugeURL))
+    }
+
+    @MainActor
+    func testPDFRasterUsesSelectedDarkPageBackground() throws {
+        let session = makeSession()
+        session.attributedText = NSAttributedString(string: "Visible pale text")
+        session.applyPagePalette(.midnight)
+
+        let pdf = try XCTUnwrap(PDFDocument(data: try XCTUnwrap(session.makePDFData())))
+        let page = try XCTUnwrap(pdf.page(at: 0))
+        let thumbnail = page.thumbnail(of: ScreenplayPageLayout.pageSize, for: .mediaBox)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(thumbnail.tiffRepresentation)))
+        let sample = try XCTUnwrap(bitmap.colorAt(x: 6, y: 6))
+
+        assertColor(sample, matches: session.pageLayout.pageColors.background, accuracy: 0.04)
     }
 
     @MainActor
@@ -630,6 +738,37 @@ final class DocumentSessionTests: XCTestCase {
         image.unlockFocus()
         let representation = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
         return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+    }
+
+    private func assertColor(
+        _ color: NSColor,
+        matches expected: DocumentRGBColor,
+        accuracy: Double = 0.002,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let rgb = color.usingColorSpace(.sRGB) else {
+            return XCTFail("Color could not be converted to sRGB", file: file, line: line)
+        }
+        XCTAssertEqual(Double(rgb.redComponent), expected.red, accuracy: accuracy, file: file, line: line)
+        XCTAssertEqual(Double(rgb.greenComponent), expected.green, accuracy: accuracy, file: file, line: line)
+        XCTAssertEqual(Double(rgb.blueComponent), expected.blue, accuracy: accuracy, file: file, line: line)
+    }
+
+    private func assertColor(
+        _ color: NSColor,
+        matches expected: NSColor,
+        accuracy: Double = 0.002,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let rgb = color.usingColorSpace(.sRGB),
+              let expectedRGB = expected.usingColorSpace(.sRGB) else {
+            return XCTFail("Color could not be converted to sRGB", file: file, line: line)
+        }
+        XCTAssertEqual(rgb.redComponent, expectedRGB.redComponent, accuracy: accuracy, file: file, line: line)
+        XCTAssertEqual(rgb.greenComponent, expectedRGB.greenComponent, accuracy: accuracy, file: file, line: line)
+        XCTAssertEqual(rgb.blueComponent, expectedRGB.blueComponent, accuracy: accuracy, file: file, line: line)
     }
 
     @MainActor

@@ -32,10 +32,9 @@ public enum DesignTokens {
     /// Dark: rich near-black with a whisper of the brand blue — ≈ #0a0c14
     public static var glassBase: Color {
         if appearance.mode == .contrast { return .black }
-        if appearance.mode == .custom {
-            return Color(hue: appearance.backgroundHue,
-                         saturation: appearance.backgroundSaturation,
-                         brightness: min(1, appearance.backgroundBrightness + 0.035))
+        if appearance.mode != .standard {
+            let value = appearance.effectiveBackgroundHSV
+            return Color(hue: value.h, saturation: value.s, brightness: min(1, value.v + 0.035))
         }
         return Color(light: .init(hue: energyHue, saturation: 0.50, brightness: 0.86, alpha: 1.0),
               dark:  .init(hue: energyHue, saturation: 0.38, brightness: 0.09, alpha: 1.0))
@@ -53,10 +52,9 @@ public enum DesignTokens {
     /// to communicate elevation.  Dark: ≈ #121726
     public static var glassElevated: Color {
         if appearance.mode == .contrast { return .black }
-        if appearance.mode == .custom {
-            return Color(hue: appearance.backgroundHue,
-                         saturation: max(0, appearance.backgroundSaturation - 0.05),
-                         brightness: min(1, appearance.backgroundBrightness + 0.10))
+        if appearance.mode != .standard {
+            let value = appearance.effectiveBackgroundHSV
+            return Color(hue: value.h, saturation: max(0, value.s - 0.05), brightness: min(1, value.v + 0.10))
         }
         return Color(light: .init(hue: energyHue, saturation: 0.40, brightness: 0.82, alpha: 1.0),
               dark:  .init(hue: energyHue, saturation: 0.48, brightness: 0.17, alpha: 0.97))
@@ -66,10 +64,9 @@ public enum DesignTokens {
     /// Dark: ≈ #0d1020
     public static var glassCard: Color {
         if appearance.mode == .contrast { return .black }
-        if appearance.mode == .custom {
-            return Color(hue: appearance.backgroundHue,
-                         saturation: appearance.backgroundSaturation,
-                         brightness: min(1, appearance.backgroundBrightness + 0.065))
+        if appearance.mode != .standard {
+            let value = appearance.effectiveBackgroundHSV
+            return Color(hue: value.h, saturation: value.s, brightness: min(1, value.v + 0.065))
         }
         return Color(light: .init(hue: energyHue, saturation: 0.40, brightness: 0.94, alpha: 1.0),
               dark:  .init(hue: energyHue, saturation: 0.44, brightness: 0.13, alpha: 1.0))
@@ -81,7 +78,7 @@ public enum DesignTokens {
     /// overhead light source strikes the glass slab.
     public static var specularCapture: Color {
         if appearance.mode == .contrast { return .white.opacity(0.85) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.55) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.55) }
         return Color(light: .init(hue: energyHue, saturation: 0.25, brightness: 1.00, alpha: 0.70),
               dark:  .init(hue: energyHue, saturation: 0.45, brightness: 1.00, alpha: 0.50))
     }
@@ -90,7 +87,7 @@ public enum DesignTokens {
     /// the specular line.
     public static var glassEdgeCatch: Color {
         if appearance.mode == .contrast { return .white.opacity(0.42) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.30) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.30) }
         return Color(light: .init(hue: energyHue, saturation: 0.55, brightness: 0.99, alpha: 0.40),
               dark:  .init(hue: energyHue, saturation: 0.65, brightness: 0.90, alpha: 0.26))
     }
@@ -99,14 +96,14 @@ public enum DesignTokens {
     /// raking across the glass surface.
     public static var glassHotSpot: Color {
         if appearance.mode == .contrast { return .white.opacity(0.12) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.10) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.10) }
         return Color(hue: energyHue, saturation: 0.90, brightness: 0.78, opacity: 0.14)
     }
 
     /// Subtle inner glow on hover / focus.
     public static var glassInnerGlow: Color {
         if appearance.mode == .contrast { return .white.opacity(0.16) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.12) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.12) }
         return Color(hue: energyHue, saturation: 0.88, brightness: 0.68, opacity: 0.10)
     }
 
@@ -115,7 +112,7 @@ public enum DesignTokens {
     /// Standard 0.5 pt border rim, hue-matched.
     public static var borderRim: Color {
         if appearance.mode == .contrast { return .white.opacity(0.72) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.42) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.42) }
         return Color(light: .init(hue: energyHue, saturation: 0.40, brightness: 0.55, alpha: 0.38),
               dark:  .init(hue: energyHue, saturation: 0.90, brightness: 0.90, alpha: 0.20))
     }
@@ -123,7 +120,7 @@ public enum DesignTokens {
     /// Stronger border for elevated / selected surfaces.
     public static var glassBorder: Color {
         if appearance.mode == .contrast { return .white.opacity(0.92) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.68) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.68) }
         return Color(light: .init(hue: energyHue, saturation: 0.55, brightness: 0.65, alpha: 0.52),
               dark:  .init(hue: energyHue, saturation: 0.95, brightness: 0.95, alpha: 0.32))
     }
@@ -134,14 +131,14 @@ public enum DesignTokens {
     /// the glass, as if the panel is self-illuminated.
     public static var panelGlow: Color {
         if appearance.mode == .contrast { return .white.opacity(0.34) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.24) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.24) }
         return Color(hue: energyHue, saturation: 0.88, brightness: 0.58, opacity: 0.28)
     }
 
     /// Stronger glow for selected / active cards.
     public static var activeCardGlow: Color {
         if appearance.mode == .contrast { return .white.opacity(0.46) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.36) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.36) }
         return Color(hue: energyHue, saturation: 0.85, brightness: 0.70, opacity: 0.40)
     }
 
@@ -150,7 +147,7 @@ public enum DesignTokens {
     /// Background on hover (button / list row bloom).
     public static var hoverBloom: Color {
         if appearance.mode == .contrast { return .white.opacity(0.20) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.15) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.15) }
         return Color(light: .init(hue: energyHue, saturation: 0.55, brightness: 0.78, alpha: 0.26),
               dark:  .init(hue: energyHue, saturation: 0.80, brightness: 0.68, alpha: 0.16))
     }
@@ -169,14 +166,14 @@ public enum DesignTokens {
     /// brand blue, analogous to the Mongrel browser's active-state blue.
     public static var accent: Color {
         if appearance.mode == .contrast { return .white }
-        if appearance.mode == .custom { return appearance.text }
+        if appearance.mode != .standard { return appearance.text }
         return Color(hue: energyHue, saturation: 0.85, brightness: 0.88)
     }
 
     /// Accent at reduced intensity — secondary interactive labels.
     public static var accentDim: Color {
         if appearance.mode == .contrast { return .white.opacity(0.78) }
-        if appearance.mode == .custom { return appearance.text.opacity(0.78) }
+        if appearance.mode != .standard { return appearance.text.opacity(0.78) }
         return Color(hue: energyHue, saturation: 0.70, brightness: 0.68, opacity: 0.80)
     }
 
