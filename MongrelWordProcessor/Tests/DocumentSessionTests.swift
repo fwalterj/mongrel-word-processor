@@ -345,6 +345,137 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testOpeningAFileDoesNotAbandonDirtyUntitledWork() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Reference.txt")
+        try "Filed reference".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        session.attributedText = NSAttributedString(string: "Unfiled work")
+        session.markDirty()
+        let untitledID = try XCTUnwrap(session.activeTabID)
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        XCTAssertEqual(session.workspaceTabs.count, 2)
+        XCTAssertEqual(session.attributedText.string, "Filed reference")
+
+        session.switchToTab(untitledID)
+        XCTAssertEqual(session.attributedText.string, "Unfiled work")
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertNil(session.currentURL)
+    }
+
+    @MainActor
+    func testOpeningSymlinkToOpenFileFocusesExistingTab() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Canonical.txt")
+        let symlink = temporaryDirectory.appendingPathComponent("Alias.txt")
+        try "One document".write(to: destination, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: destination)
+        let session = makeSession()
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        let sourceID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+
+        XCTAssertTrue(session.openDocument(at: symlink))
+        XCTAssertEqual(session.activeTabID, sourceID)
+        XCTAssertEqual(session.workspaceTabs.count, 2)
+    }
+
+    @MainActor
+    func testSaveAsRefusesToOverwriteFileOwnedByAnotherTab() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Owned.txt")
+        try "Original contents".write(to: destination, atomically: true, encoding: .utf8)
+        var presentedErrors: [(String, String)] = []
+        let session = makeSession { message, details in
+            presentedErrors.append((message, details))
+        }
+        XCTAssertTrue(session.openDocument(at: destination))
+        session.newScreenplay()
+        session.attributedText = NSAttributedString(string: "Competing contents")
+        session.markDirty()
+
+        XCTAssertFalse(session.saveDocument(to: destination, type: .plainText))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "Original contents")
+        XCTAssertNil(session.currentURL)
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertEqual(presentedErrors.first?.0, "File Is Already Open")
+        XCTAssertTrue(presentedErrors.first?.1.contains("Owned.txt") == true)
+    }
+
+    @MainActor
+    func testClosingCleanBackgroundTabDoesNotChangeActiveTab() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Background.txt")
+        try "Background document".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        let backgroundID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+        let foregroundID = try XCTUnwrap(session.activeTabID)
+
+        session.closeTab(backgroundID)
+
+        XCTAssertEqual(session.activeTabID, foregroundID)
+        XCTAssertEqual(session.authoringMode, .screenplay)
+        XCTAssertFalse(session.workspaceTabs.contains(where: { $0.id == backgroundID }))
+        XCTAssertTrue(session.canReopenClosedTab)
+    }
+
+    @MainActor
+    func testReopeningClosedFileAlreadyOpenFocusesExistingTabWithoutDuplication() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Reopened.txt")
+        try "One live copy".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        let originalID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+        session.closeTab(originalID)
+        XCTAssertTrue(session.openDocument(at: destination))
+        let reopenedID = try XCTUnwrap(session.activeTabID)
+        let countBeforeRestore = session.workspaceTabs.count
+
+        session.reopenClosedTab()
+
+        XCTAssertEqual(session.activeTabID, reopenedID)
+        XCTAssertEqual(session.workspaceTabs.count, countBeforeRestore)
+        XCTAssertFalse(session.canReopenClosedTab)
+    }
+
+    @MainActor
+    func testClosingPristineBlankTabDoesNotPopulateClosedTabHistory() {
+        let session = makeSession()
+
+        session.closeDocument()
+
+        XCTAssertEqual(session.workspaceTabs.count, 1)
+        XCTAssertFalse(session.canReopenClosedTab)
+        XCTAssertEqual(session.title, "Untitled")
+        XCTAssertEqual(session.authoringMode, .prose)
+    }
+
+    @MainActor
+    func testAutosaveSkipsLossyFormatWhenNativePageLayoutIsPresent() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Layout.txt")
+        let session = makeSession()
+        session.attributedText = NSAttributedString(string: "Saved body")
+        XCTAssertTrue(session.saveDocument(to: destination, type: .plainText))
+        let sourceID = try XCTUnwrap(session.activeTabID)
+
+        session.attributedText = NSAttributedString(string: "Unsaved body")
+        session.pageLayout.header.isEnabled = true
+        session.pageLayout.header.text = "Keep this editable"
+        session.markDirty()
+        session.autosaveOnTabSwitch = true
+        session.newCodeDocument()
+
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "Saved body")
+        let sourceTab = try XCTUnwrap(session.workspaceTabs.first(where: { $0.id == sourceID }))
+        XCTAssertTrue(sourceTab.isDirty)
+
+        session.switchToTab(sourceID)
+        XCTAssertEqual(session.attributedText.string, "Unsaved body")
+        XCTAssertEqual(session.pageLayout.header.text, "Keep this editable")
+    }
+
+    @MainActor
     func testCleanClosedTabCanBeReopened() throws {
         let session = makeSession()
         session.newScreenplay()
@@ -994,10 +1125,13 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
-    private func makeSession() -> DocumentSession {
+    private func makeSession(
+        errorPresenter: ((String, String) -> Void)? = nil
+    ) -> DocumentSession {
         DocumentSession(
             defaults: defaults,
-            companionLexicon: MongrelDictionaryCompanionLexicon(headwords: [])
+            companionLexicon: MongrelDictionaryCompanionLexicon(headwords: []),
+            errorPresenter: errorPresenter
         )
     }
 }

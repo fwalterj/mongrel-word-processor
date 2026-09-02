@@ -578,6 +578,7 @@ final class DocumentSession: ObservableObject {
     private let persistenceStore: WordProcessorPersistenceStore
     private let auditLogger = WordProcessorAuditLogger()
     private let defaults: UserDefaults
+    private let errorPresenter: (String, String) -> Void
     private let recentDocsKey = "wordprocessor.recentDocs"
     private let editorZoomKey = "wordprocessor.editorZoom"
     private let screenplayViewStyleKey = "wordprocessor.screenplayViewStyle"
@@ -594,11 +595,19 @@ final class DocumentSession: ObservableObject {
 
     init(
         defaults: UserDefaults = .standard,
-        companionLexicon: MongrelDictionaryCompanionLexicon = MongrelDictionaryCompanionLexicon()
+        companionLexicon: MongrelDictionaryCompanionLexicon = MongrelDictionaryCompanionLexicon(),
+        errorPresenter: ((String, String) -> Void)? = nil
     ) {
         self.defaults = defaults
         self.persistenceStore = WordProcessorPersistenceStore(defaults: defaults)
         self.companionLexicon = companionLexicon
+        self.errorPresenter = errorPresenter ?? { message, details in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = message
+            alert.informativeText = details
+            alert.runModal()
+        }
         self.codeLanguage = CodeLanguage(rawValue: defaults.string(forKey: codeLanguageKey) ?? "") ?? .swift
         self.codeTheme = CodeTheme(rawValue: defaults.string(forKey: codeThemeKey) ?? "") ?? .studio
         self.codeFont = CodeFont(rawValue: defaults.string(forKey: codeFontKey) ?? "") ?? .systemMono
@@ -664,37 +673,38 @@ final class DocumentSession: ObservableObject {
     }
 
     func closeTab(_ id: UUID) {
-        guard let index = workspaceTabs.firstIndex(where: { $0.id == id }) else { return }
+        guard let initialIndex = workspaceTabs.firstIndex(where: { $0.id == id }) else { return }
+        let previouslyActiveTabID = activeTabID
+
         if activeTabID != id {
+            guard workspaceTabs[initialIndex].isDirty else {
+                archiveAndRemoveTab(id, fallbackIndex: initialIndex)
+                return
+            }
             activateWorkspaceTab(id, autosaveCurrent: true)
         }
-        guard activeTabID == id, confirmCanAbandonChanges() else { return }
 
-        syncActiveTabState()
-        if let tab = workspaceTabs.first(where: { $0.id == id }),
-           let state = workspaceTabStates[id] {
-            closedWorkspaceTabs.append((tab, state))
-            if closedWorkspaceTabs.count > 10 {
-                closedWorkspaceTabs.removeFirst(closedWorkspaceTabs.count - 10)
+        guard activeTabID == id, confirmCanAbandonChanges() else {
+            if let previouslyActiveTabID, previouslyActiveTabID != id {
+                activateWorkspaceTab(previouslyActiveTabID, autosaveCurrent: false)
             }
-            canReopenClosedTab = true
+            return
         }
 
-        workspaceTabs.removeAll { $0.id == id }
-        workspaceTabStates[id] = nil
-        activeTabID = nil
-
-        if workspaceTabs.isEmpty {
-            installNewWorkspaceTab(state: makeBlankWorkspaceState(mode: .prose), reuseActiveTab: false)
-        } else {
-            let nextIndex = min(index, workspaceTabs.count - 1)
-            activateWorkspaceTab(workspaceTabs[nextIndex].id, autosaveCurrent: false)
-        }
-        auditLogger.info("close_document")
+        archiveAndRemoveTab(id, fallbackIndex: initialIndex)
     }
 
     func reopenClosedTab() {
         guard let (tab, state) = closedWorkspaceTabs.popLast() else { return }
+        canReopenClosedTab = !closedWorkspaceTabs.isEmpty
+
+        if let url = state.currentURL,
+           let existingTab = workspaceTabs.first(where: { urlsReferToSameDocument($0.url, url) }) {
+            switchToTab(existingTab.id)
+            return
+        }
+
+        autosaveCurrentTabIfNeeded()
         syncActiveTabState()
         let id = workspaceTabs.contains(where: { $0.id == tab.id }) ? UUID() : tab.id
         workspaceTabs.append(DocumentWorkspaceTab(
@@ -705,8 +715,7 @@ final class DocumentSession: ObservableObject {
             url: tab.url
         ))
         workspaceTabStates[id] = state
-        canReopenClosedTab = !closedWorkspaceTabs.isEmpty
-        activateWorkspaceTab(id, autosaveCurrent: true)
+        activateWorkspaceTab(id, autosaveCurrent: false)
     }
 
     func markDirty() {
@@ -765,30 +774,28 @@ final class DocumentSession: ObservableObject {
     }
 
     func openDocument() {
-        guard confirmCanAbandonChanges() else { return }
-
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.allowedContentTypes = Self.openableDocumentTypes
 
-        guard panel.runModal() == .OK, let url = panel.url else {
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else {
             auditLogger.info("open_document_cancelled")
             return
         }
 
-        auditLogger.info("open_document_selected", metadata: ["file": url.lastPathComponent])
-        openDocument(at: url)
+        auditLogger.info("open_document_selected", metadata: ["count": panel.urls.count])
+        for url in panel.urls {
+            openDocument(at: url)
+        }
     }
 
     func openExternalDocument(at url: URL) {
-        guard confirmCanAbandonChanges() else { return }
         openDocument(at: url)
     }
 
     func reopenLastDocument() {
-        guard confirmCanAbandonChanges() else { return }
         guard let bookmarkData = persistenceStore.lastDocumentBookmarkData() else {
             presentError("No Previous Document", details: "There is no previously opened file to restore.")
             hasRestorableLastDocument = false
@@ -824,8 +831,7 @@ final class DocumentSession: ObservableObject {
     /// Finder-open events and keeps the actual file lifecycle testable.
     @discardableResult
     func openDocument(at url: URL) -> Bool {
-        let standardizedURL = url.standardizedFileURL
-        if let existingTab = workspaceTabs.first(where: { $0.url?.standardizedFileURL == standardizedURL }) {
+        if let existingTab = workspaceTabs.first(where: { urlsReferToSameDocument($0.url, url) }) {
             switchToTab(existingTab.id)
             return true
         }
@@ -1317,6 +1323,19 @@ final class DocumentSession: ObservableObject {
 
     @discardableResult
     private func writeDocument(to url: URL, type: UTType, shouldTrackAsCurrent: Bool = true) -> Bool {
+        if let owner = workspaceTabs.first(where: { urlsReferToSameDocument($0.url, url) }),
+           owner.id != activeTabID {
+            presentError(
+                "File Is Already Open",
+                details: "\(url.lastPathComponent) belongs to another workspace tab. Close that tab or choose a different filename."
+            )
+            auditLogger.warning(
+                "save_document_conflict",
+                metadata: ["type": type.identifier, "file": url.lastPathComponent]
+            )
+            return false
+        }
+
         let didAccessSecurityScope = url.startAccessingSecurityScopedResource()
         defer {
             if didAccessSecurityScope {
@@ -1482,6 +1501,53 @@ final class DocumentSession: ObservableObject {
         auditLogger.info("switch_workspace_tab", metadata: ["mode": state.authoringMode.rawValue])
     }
 
+    private func archiveAndRemoveTab(_ id: UUID, fallbackIndex: Int) {
+        let wasActive = activeTabID == id
+        if wasActive {
+            syncActiveTabState()
+        }
+
+        if let tab = workspaceTabs.first(where: { $0.id == id }),
+           let state = workspaceTabStates[id],
+           !isPristineWorkspaceState(state) {
+            closedWorkspaceTabs.append((tab, state))
+            if closedWorkspaceTabs.count > 10 {
+                closedWorkspaceTabs.removeFirst(closedWorkspaceTabs.count - 10)
+            }
+        }
+        canReopenClosedTab = !closedWorkspaceTabs.isEmpty
+
+        workspaceTabs.removeAll { $0.id == id }
+        workspaceTabStates[id] = nil
+
+        if wasActive {
+            activeTabID = nil
+            if workspaceTabs.isEmpty {
+                installNewWorkspaceTab(state: makeBlankWorkspaceState(mode: .prose), reuseActiveTab: false)
+            } else {
+                let nextIndex = min(fallbackIndex, workspaceTabs.count - 1)
+                activateWorkspaceTab(workspaceTabs[nextIndex].id, autosaveCurrent: false)
+            }
+        }
+        auditLogger.info("close_document")
+    }
+
+    private func isPristineWorkspaceState(_ state: DocumentWorkspaceTabState) -> Bool {
+        state.currentURL == nil
+            && !state.hasUnsavedChanges
+            && state.attributedText.length == 0
+            && state.pageLayout == .empty
+    }
+
+    private func urlsReferToSameDocument(_ lhs: URL?, _ rhs: URL) -> Bool {
+        guard let lhs else { return false }
+        return canonicalDocumentURL(lhs) == canonicalDocumentURL(rhs)
+    }
+
+    private func canonicalDocumentURL(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
     private func autosaveCurrentTabIfNeeded() {
         guard autosaveOnTabSwitch,
               hasUnsavedChanges,
@@ -1595,11 +1661,7 @@ final class DocumentSession: ObservableObject {
     }
 
     private func presentError(_ message: String, details: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = message
-        alert.informativeText = details
-        alert.runModal()
+        errorPresenter(message, details)
     }
 }
 
@@ -1748,7 +1810,6 @@ extension DocumentSession {
     }
 
     func openRecentDocument(_ doc: RecentDoc) {
-        guard confirmCanAbandonChanges() else { return }
         guard FileManager.default.fileExists(atPath: doc.path) else {
             recentDocuments.removeAll { $0.id == doc.id }
             persistRecentDocuments()
