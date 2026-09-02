@@ -110,6 +110,35 @@ final class FormattingBridge: ObservableObject {
         textView.scrollRangeToVisible(range)
     }
 
+    func toggleLineComment(prefix: String) {
+        guard let textView else { return }
+        applyCodeEdit(
+            CodeTextEditing.toggleLineComment(
+                textView.string,
+                selection: textView.selectedRange(),
+                prefix: prefix
+            ),
+            to: textView
+        )
+    }
+
+    func duplicateSelectedLines() {
+        guard let textView else { return }
+        applyCodeEdit(
+            CodeTextEditing.duplicateLines(textView.string, selection: textView.selectedRange()),
+            to: textView
+        )
+    }
+
+    private func applyCodeEdit(_ edit: CodeEditResult, to textView: NSTextView) {
+        guard edit.text != textView.string else { return }
+        let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+        guard textView.shouldChangeText(in: fullRange, replacementString: edit.text) else { return }
+        textView.textStorage?.replaceCharacters(in: fullRange, with: edit.text)
+        textView.setSelectedRange(edit.selection)
+        textView.didChangeText()
+    }
+
     /// Called by Coordinator.textViewDidChangeSelection to refresh active-state flags.
     func updateFormattingState(from tv: NSTextView) {
         let range = tv.selectedRange()

@@ -56,12 +56,15 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
             onEdit: { editCount += 1 },
             onScreenplayElementChange: { _ in },
             onPaginationChange: { _ in },
+            onCodePositionChange: { _, _, _ in },
             bridge: bridge,
             companionLexicon: MongrelDictionaryCompanionLexicon(headwords: []),
             authoringMode: .screenplay,
             screenplayElement: .action,
             codeLanguage: .swift,
             codeTheme: .cobalt,
+            codeFont: .systemMono,
+            codeFontSize: 14,
             codeUseTabs: false,
             codeTabWidth: 4,
             codeLineWrap: true,
@@ -192,9 +195,118 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(harness.textView.string, "😀a")
     }
 
+    func testCodeReturnAndTabCommandsUseIndentationPreferences() {
+        let harness = makeHarness(authoringMode: .code, codeTabWidth: 2)
+        harness.textView.string = "{}"
+        harness.textView.setSelectedRange(NSRange(location: 1, length: 0))
+
+        XCTAssertTrue(harness.coordinator.textView(
+            harness.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        ))
+        XCTAssertEqual(harness.textView.string, "{\n  \n}")
+
+        harness.textView.setSelectedRange(NSRange(location: 2, length: 2))
+        XCTAssertTrue(harness.coordinator.textView(
+            harness.textView,
+            doCommandBy: #selector(NSResponder.insertTab(_:))
+        ))
+        XCTAssertTrue(harness.textView.string.contains("    "))
+    }
+
+    func testEmptyCodeDocumentStartsWithMonospacedTypingAttributes() throws {
+        let harness = makeHarness(authoringMode: .code)
+
+        harness.coordinator.applyEditorMode(.code, to: harness.textView)
+
+        let font = try XCTUnwrap(harness.textView.typingAttributes[.font] as? NSFont)
+        XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.monoSpace))
+        XCTAssertEqual(font.pointSize, 14)
+        XCTAssertEqual(harness.textView.textContainerInset, NSSize(width: 28, height: 24))
+        XCTAssertNotNil(harness.textView.typingAttributes[.foregroundColor] as? NSColor)
+    }
+
+    func testCodeTypographyPreferenceChangesRenderedFontSize() throws {
+        let harness = makeHarness(authoringMode: .code, codeFont: .menlo, codeFontSize: 18)
+
+        harness.coordinator.applyEditorMode(.code, to: harness.textView)
+
+        let font = try XCTUnwrap(harness.textView.typingAttributes[.font] as? NSFont)
+        XCTAssertEqual(font.pointSize, 18)
+        XCTAssertTrue(font.fontName.localizedCaseInsensitiveContains("Menlo"))
+    }
+
+    func testURLInsideCodeStringDoesNotBecomeAComment() throws {
+        let harness = makeHarness(authoringMode: .code, codeLanguage: .javascript)
+        harness.textView.string = "const url = \"https://example.com\" // actual comment"
+
+        harness.coordinator.applyEditorMode(.code, to: harness.textView)
+
+        let source = harness.textView.string as NSString
+        let stringColor = try XCTUnwrap(
+            harness.textView.textStorage?.attribute(
+                .foregroundColor,
+                at: source.range(of: "https").location,
+                effectiveRange: nil
+            ) as? NSColor
+        )
+        let commentColor = try XCTUnwrap(
+            harness.textView.textStorage?.attribute(
+                .foregroundColor,
+                at: source.range(of: "actual").location,
+                effectiveRange: nil
+            ) as? NSColor
+        )
+        XCTAssertNotEqual(stringColor, commentColor)
+    }
+
+    func testLayoutContrastModeDoesNotFlattenCodeSyntaxColors() throws {
+        let appearance = MongrelAppearancePreferences.shared
+        let originalMode = appearance.mode
+        defer { appearance.mode = originalMode }
+        appearance.mode = .contrast
+        let harness = makeHarness(authoringMode: .code)
+        harness.textView.string = "let value = 42"
+
+        harness.coordinator.applyEditorMode(.code, to: harness.textView)
+
+        let keyword = try XCTUnwrap(
+            harness.textView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        )
+        let identifier = try XCTUnwrap(
+            harness.textView.textStorage?.attribute(.foregroundColor, at: 4, effectiveRange: nil) as? NSColor
+        )
+        XCTAssertNotEqual(keyword, identifier)
+    }
+
+    func testCodeSelectionReportsLineColumnAndSelectionLength() {
+        var reported = (line: 0, column: 0, length: 0)
+        let harness = makeHarness(
+            authoringMode: .code,
+            onCodePositionChange: { reported = ($0, $1, $2) }
+        )
+        harness.textView.string = "first\nsecond"
+        harness.textView.setSelectedRange(NSRange(location: 8, length: 2))
+
+        harness.coordinator.textViewDidChangeSelection(
+            Notification(name: NSTextView.didChangeSelectionNotification, object: harness.textView)
+        )
+
+        XCTAssertEqual(reported.line, 2)
+        XCTAssertEqual(reported.column, 3)
+        XCTAssertEqual(reported.length, 2)
+    }
+
     private func makeHarness(
         authoringMode: AuthoringMode = .screenplay,
         pagePalette: DocumentPagePalette = .warmPaper,
+        codeLanguage: CodeLanguage = .swift,
+        codeTheme: CodeTheme = .studio,
+        codeFont: CodeFont = .systemMono,
+        codeFontSize: CGFloat = 14,
+        codeUseTabs: Bool = false,
+        codeTabWidth: Int = 4,
+        onCodePositionChange: @escaping (Int, Int, Int) -> Void = { _, _, _ in },
         onElementChange: @escaping (ScreenplayElement) -> Void = { _ in }
     ) -> (
         coordinator: TextKit2EditorView.Coordinator,
@@ -215,14 +327,17 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
             onEdit: {},
             onScreenplayElementChange: onElementChange,
             onPaginationChange: { _ in },
+            onCodePositionChange: onCodePositionChange,
             bridge: bridge,
             companionLexicon: MongrelDictionaryCompanionLexicon(headwords: []),
             authoringMode: authoringMode,
             screenplayElement: .action,
-            codeLanguage: .swift,
-            codeTheme: .cobalt,
-            codeUseTabs: false,
-            codeTabWidth: 4,
+            codeLanguage: codeLanguage,
+            codeTheme: codeTheme,
+            codeFont: codeFont,
+            codeFontSize: codeFontSize,
+            codeUseTabs: codeUseTabs,
+            codeTabWidth: codeTabWidth,
             codeLineWrap: true,
             editorZoom: 1,
             typewriterMode: false,

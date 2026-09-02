@@ -226,29 +226,126 @@ enum ScreenplayElement: String, CaseIterable {
 enum CodeLanguage: String, CaseIterable {
     case swift
     case javascript
+    case typescript
     case python
     case json
+    case html
+    case css
+    case shell
+    case markdown
+    case yaml
+    case sql
 
     var title: String {
         switch self {
         case .swift: return "Swift"
         case .javascript: return "JavaScript"
+        case .typescript: return "TypeScript"
         case .python: return "Python"
         case .json: return "JSON"
+        case .html: return "HTML"
+        case .css: return "CSS"
+        case .shell: return "Shell"
+        case .markdown: return "Markdown"
+        case .yaml: return "YAML"
+        case .sql: return "SQL"
         }
+    }
+
+    var preferredFilenameExtension: String {
+        switch self {
+        case .swift: return "swift"
+        case .javascript: return "js"
+        case .typescript: return "ts"
+        case .python: return "py"
+        case .json: return "json"
+        case .html: return "html"
+        case .css: return "css"
+        case .shell: return "sh"
+        case .markdown: return "md"
+        case .yaml: return "yaml"
+        case .sql: return "sql"
+        }
+    }
+
+    var filenameExtensions: Set<String> {
+        switch self {
+        case .swift: return ["swift"]
+        case .javascript: return ["js", "jsx", "mjs", "cjs"]
+        case .typescript: return ["ts", "tsx", "mts", "cts"]
+        case .python: return ["py", "pyw"]
+        case .json: return ["json", "jsonc"]
+        case .html: return ["html", "htm"]
+        case .css: return ["css", "scss", "sass", "less"]
+        case .shell: return ["sh", "bash", "zsh", "fish"]
+        case .markdown: return ["md", "markdown", "mdown"]
+        case .yaml: return ["yaml", "yml"]
+        case .sql: return ["sql"]
+        }
+    }
+
+    var contentType: UTType {
+        UTType(filenameExtension: preferredFilenameExtension, conformingTo: .sourceCode) ?? .sourceCode
+    }
+
+    var lineCommentPrefix: String? {
+        switch self {
+        case .swift, .javascript, .typescript: return "//"
+        case .python, .shell, .yaml: return "#"
+        case .sql: return "--"
+        case .json, .html, .css, .markdown: return nil
+        }
+    }
+
+    static func detected(from url: URL) -> CodeLanguage? {
+        let ext = url.pathExtension.lowercased()
+        return allCases.first { $0.filenameExtensions.contains(ext) }
+    }
+
+    static func detected(fromShebang text: String) -> CodeLanguage? {
+        guard let firstLine = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first,
+              firstLine.hasPrefix("#!") else { return nil }
+        let value = firstLine.lowercased()
+        if value.contains("python") { return .python }
+        if value.contains("node") || value.contains("deno") { return .javascript }
+        if value.contains("swift") { return .swift }
+        if value.contains("bash") || value.contains("zsh") || value.contains("fish") || value.contains("/sh") {
+            return .shell
+        }
+        return nil
     }
 }
 
 enum CodeTheme: String, CaseIterable {
+    case studio
+    case paper
+    case midnight
     case cobalt
     case frost
     case amber
 
     var title: String {
         switch self {
+        case .studio: return "Studio"
+        case .paper: return "Paper"
+        case .midnight: return "Midnight"
         case .cobalt: return "Cobalt"
         case .frost: return "Frost"
-        case .amber: return "Amber"
+        case .amber: return "Amber Terminal"
+        }
+    }
+}
+
+enum CodeFont: String, CaseIterable {
+    case systemMono
+    case menlo
+    case monaco
+
+    var title: String {
+        switch self {
+        case .systemMono: return "SF Mono"
+        case .menlo: return "Menlo"
+        case .monaco: return "Monaco"
         }
     }
 }
@@ -258,6 +355,7 @@ final class DocumentSession: ObservableObject {
     static let editableDocumentTypes: [UTType] = [
         .mongrelDocument,
         .mongrelScreenplay,
+        .sourceCode,
         .rtfd,
         .rtf,
         .wordDocument,
@@ -304,11 +402,64 @@ final class DocumentSession: ObservableObject {
             updateMetrics()
         }
     }
-    @Published var codeLanguage: CodeLanguage = .swift
-    @Published var codeTheme: CodeTheme = .cobalt
-    @Published var codeUseTabs: Bool = false
-    @Published var codeTabWidth: Int = 4
-    @Published var codeLineWrap: Bool = false
+    @Published var codeLanguage: CodeLanguage = .swift {
+        didSet {
+            guard codeLanguage != oldValue else { return }
+            defaults.set(codeLanguage.rawValue, forKey: codeLanguageKey)
+            if currentURL == nil, authoringMode == .code {
+                currentType = codeLanguage.contentType
+            }
+        }
+    }
+    @Published var codeTheme: CodeTheme = .studio {
+        didSet {
+            guard codeTheme != oldValue else { return }
+            defaults.set(codeTheme.rawValue, forKey: codeThemeKey)
+        }
+    }
+    @Published var codeFont: CodeFont = .systemMono {
+        didSet {
+            guard codeFont != oldValue else { return }
+            defaults.set(codeFont.rawValue, forKey: codeFontKey)
+        }
+    }
+    @Published var codeFontSize: CGFloat = 14 {
+        didSet {
+            guard codeFontSize != oldValue else { return }
+            let normalized = min(max(codeFontSize.rounded(), 11), 24)
+            if codeFontSize != normalized {
+                codeFontSize = normalized
+                return
+            }
+            defaults.set(Double(codeFontSize), forKey: codeFontSizeKey)
+        }
+    }
+    @Published var codeUseTabs: Bool = false {
+        didSet {
+            guard codeUseTabs != oldValue else { return }
+            defaults.set(codeUseTabs, forKey: codeUseTabsKey)
+        }
+    }
+    @Published var codeTabWidth: Int = 4 {
+        didSet {
+            guard codeTabWidth != oldValue else { return }
+            let normalized = [2, 4, 8].contains(codeTabWidth) ? codeTabWidth : 4
+            if codeTabWidth != normalized {
+                codeTabWidth = normalized
+                return
+            }
+            defaults.set(codeTabWidth, forKey: codeTabWidthKey)
+        }
+    }
+    @Published var codeLineWrap: Bool = false {
+        didSet {
+            guard codeLineWrap != oldValue else { return }
+            defaults.set(codeLineWrap, forKey: codeLineWrapKey)
+        }
+    }
+    @Published private(set) var codeCursorLine: Int = 1
+    @Published private(set) var codeCursorColumn: Int = 1
+    @Published private(set) var codeSelectionLength: Int = 0
     @Published var screenplayElement: ScreenplayElement = .action
     @Published private(set) var editorZoom: CGFloat = 1
     @Published var screenplayViewStyle: ScreenplayViewStyle = .fitWidth {
@@ -344,6 +495,17 @@ final class DocumentSession: ObservableObject {
         Int((editorZoom * 100).rounded())
     }
 
+    var codeLineCount: Int {
+        guard !attributedText.string.isEmpty else { return 1 }
+        return attributedText.string.reduce(into: 1) { count, character in
+            if character == "\n" { count += 1 }
+        }
+    }
+
+    var codeIndentationSummary: String {
+        codeUseTabs ? "Tabs · \(codeTabWidth) columns" : "Spaces · \(codeTabWidth)"
+    }
+
     var companionSpellcheckSummary: String {
         companionLexicon.status.summary
     }
@@ -364,6 +526,13 @@ final class DocumentSession: ObservableObject {
     private let editorZoomKey = "wordprocessor.editorZoom"
     private let screenplayViewStyleKey = "wordprocessor.screenplayViewStyle"
     private let typewriterModeKey = "wordprocessor.typewriterMode"
+    private let codeLanguageKey = "wordprocessor.codeLanguage"
+    private let codeThemeKey = "wordprocessor.codeTheme"
+    private let codeFontKey = "wordprocessor.codeFont"
+    private let codeFontSizeKey = "wordprocessor.codeFontSize"
+    private let codeUseTabsKey = "wordprocessor.codeUseTabs"
+    private let codeTabWidthKey = "wordprocessor.codeTabWidth"
+    private let codeLineWrapKey = "wordprocessor.codeLineWrap"
     private var languageToolRequestID: UUID?
 
     init(
@@ -373,6 +542,15 @@ final class DocumentSession: ObservableObject {
         self.defaults = defaults
         self.persistenceStore = WordProcessorPersistenceStore(defaults: defaults)
         self.companionLexicon = companionLexicon
+        self.codeLanguage = CodeLanguage(rawValue: defaults.string(forKey: codeLanguageKey) ?? "") ?? .swift
+        self.codeTheme = CodeTheme(rawValue: defaults.string(forKey: codeThemeKey) ?? "") ?? .studio
+        self.codeFont = CodeFont(rawValue: defaults.string(forKey: codeFontKey) ?? "") ?? .systemMono
+        let storedCodeFontSize = defaults.double(forKey: codeFontSizeKey)
+        self.codeFontSize = storedCodeFontSize == 0 ? 14 : min(max(CGFloat(storedCodeFontSize.rounded()), 11), 24)
+        self.codeUseTabs = defaults.bool(forKey: codeUseTabsKey)
+        let storedTabWidth = defaults.integer(forKey: codeTabWidthKey)
+        self.codeTabWidth = [2, 4, 8].contains(storedTabWidth) ? storedTabWidth : 4
+        self.codeLineWrap = defaults.bool(forKey: codeLineWrapKey)
         let storedZoom = defaults.double(forKey: editorZoomKey)
         self.editorZoom = storedZoom == 0 ? 1 : min(max(CGFloat(storedZoom), 0.6), 2)
         self.screenplayViewStyle = ScreenplayViewStyle(
@@ -427,6 +605,25 @@ final class DocumentSession: ObservableObject {
         auditLogger.info("new_screenplay")
     }
 
+    func newCodeDocument() {
+        guard confirmCanAbandonChanges() else { return }
+        applyProgrammaticState {
+            title = "Untitled Code"
+            attributedText = NSAttributedString(string: "")
+            currentURL = nil
+            currentType = codeLanguage.contentType
+            authoringMode = .code
+            pageLayout = .empty
+            hasUnsavedChanges = false
+            codeCursorLine = 1
+            codeCursorColumn = 1
+            codeSelectionLength = 0
+        }
+        invalidateLanguageToolResults()
+        updateMetrics()
+        auditLogger.info("new_code_document", metadata: ["language": codeLanguage.rawValue])
+    }
+
     func closeDocument() {
         guard canCloseDocument else { return }
         guard confirmCanAbandonChanges() else { return }
@@ -455,6 +652,28 @@ final class DocumentSession: ObservableObject {
         let normalizedCount = max(1, count)
         guard screenplayPageCount != normalizedCount else { return }
         screenplayPageCount = normalizedCount
+    }
+
+    func updateCodeCursor(line: Int, column: Int, selectionLength: Int) {
+        let normalizedLine = max(1, line)
+        let normalizedColumn = max(1, column)
+        let normalizedSelection = max(0, selectionLength)
+        guard codeCursorLine != normalizedLine
+                || codeCursorColumn != normalizedColumn
+                || codeSelectionLength != normalizedSelection else { return }
+        codeCursorLine = normalizedLine
+        codeCursorColumn = normalizedColumn
+        codeSelectionLength = normalizedSelection
+    }
+
+    func toggleCodeComment() {
+        guard authoringMode == .code, let prefix = codeLanguage.lineCommentPrefix else { return }
+        formattingBridge.toggleLineComment(prefix: prefix)
+    }
+
+    func duplicateCodeLines() {
+        guard authoringMode == .code else { return }
+        formattingBridge.duplicateSelectedLines()
     }
 
     func adjustEditorZoom(by delta: CGFloat) {
@@ -553,6 +772,9 @@ final class DocumentSession: ObservableObject {
                 currentURL = url
                 currentType = loaded.type
                 authoringMode = loaded.mode
+                if let loadedLanguage = loaded.codeLanguage {
+                    codeLanguage = loadedLanguage
+                }
                 pageLayout = loaded.pageLayout
                 hasUnsavedChanges = false
             }
@@ -888,6 +1110,8 @@ final class DocumentSession: ObservableObject {
             ext = "mongreldoc"
         } else if type == .mongrelScreenplay {
             ext = "mgscreenplay"
+        } else if type.conforms(to: .sourceCode) {
+            ext = codeLanguage.preferredFilenameExtension
         } else {
             ext = type.preferredFilenameExtension ?? "txt"
         }
@@ -917,14 +1141,17 @@ final class DocumentSession: ObservableObject {
         case "rtf": return .rtf
         case "docx": return .wordDocument
         case "txt", "text": return .plainText
-        default: return currentType
+        default:
+            return CodeLanguage.detected(from: url)?.contentType
+                ?? UTType(filenameExtension: url.pathExtension)
+                ?? currentType
         }
     }
 
     private func defaultDocumentType(for mode: AuthoringMode) -> UTType {
         switch mode {
         case .screenplay: return .mongrelScreenplay
-        case .code: return .plainText
+        case .code: return codeLanguage.contentType
         case .prose: return .mongrelDocument
         }
     }
@@ -933,6 +1160,7 @@ final class DocumentSession: ObservableObject {
         text: NSAttributedString,
         type: UTType,
         mode: AuthoringMode,
+        codeLanguage: CodeLanguage?,
         pageLayout: DocumentPageLayout
     ) {
         if url.pathExtension.lowercased() == "mongreldoc" {
@@ -944,6 +1172,7 @@ final class DocumentSession: ObservableObject {
                 try archive.makeAttributedString(),
                 .mongrelDocument,
                 archive.authoringMode,
+                archive.codeLanguage,
                 archive.pageLayout.sanitized
             )
         }
@@ -957,6 +1186,7 @@ final class DocumentSession: ObservableObject {
                 try archive.makeAttributedString(),
                 .mongrelScreenplay,
                 .screenplay,
+                nil,
                 (archive.pageLayout ?? .empty).sanitized
             )
         }
@@ -967,7 +1197,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
             )
-            return (text, .rtf, .prose, .empty)
+            return (text, .rtf, .prose, nil, .empty)
         }
 
         if url.pathExtension.lowercased() == "rtfd" {
@@ -976,7 +1206,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.rtfd],
                 documentAttributes: nil
             )
-            return (text, .rtfd, .prose, .empty)
+            return (text, .rtfd, .prose, nil, .empty)
         }
 
         if url.pathExtension.lowercased() == "docx" {
@@ -985,7 +1215,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.officeOpenXML],
                 documentAttributes: nil
             )
-            return (text, .wordDocument, .prose, .empty)
+            return (text, .wordDocument, .prose, nil, .empty)
         }
 
         let imported = try NSAttributedString(
@@ -1004,7 +1234,14 @@ final class DocumentSession: ObservableObject {
                 .paragraphStyle: paragraph
             ]
         )
-        return (attributed, .plainText, .prose, .empty)
+        let detectedLanguage = CodeLanguage.detected(from: url) ?? CodeLanguage.detected(fromShebang: text)
+        return (
+            attributed,
+            detectedLanguage?.contentType ?? .plainText,
+            detectedLanguage == nil ? .prose : .code,
+            detectedLanguage,
+            .empty
+        )
     }
 
     @discardableResult
@@ -1021,6 +1258,7 @@ final class DocumentSession: ObservableObject {
                 let data = try JSONEncoder().encode(MongrelDocumentArchive(
                     attributedText: attributedText,
                     authoringMode: authoringMode,
+                    codeLanguage: authoringMode == .code ? codeLanguage : nil,
                     pageLayout: pageLayout
                 ))
                 try data.write(to: url, options: .atomic)
@@ -1302,6 +1540,7 @@ private struct MongrelDocumentArchive: Codable {
     let formatVersion: Int
     let richTextData: Data
     let mode: String
+    let codeLanguageName: String?
     let pageLayout: DocumentPageLayout
     let elementRanges: [ElementRange]
 
@@ -1309,9 +1548,14 @@ private struct MongrelDocumentArchive: Codable {
         AuthoringMode(rawValue: mode) ?? .prose
     }
 
+    var codeLanguage: CodeLanguage? {
+        codeLanguageName.flatMap(CodeLanguage.init(rawValue:))
+    }
+
     init(
         attributedText: NSAttributedString,
         authoringMode: AuthoringMode,
+        codeLanguage: CodeLanguage? = nil,
         pageLayout: DocumentPageLayout
     ) throws {
         formatVersion = 1
@@ -1320,6 +1564,7 @@ private struct MongrelDocumentArchive: Codable {
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
         )
         mode = authoringMode.rawValue
+        codeLanguageName = codeLanguage?.rawValue
         self.pageLayout = pageLayout
 
         var ranges: [ElementRange] = []

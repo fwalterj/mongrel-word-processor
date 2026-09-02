@@ -42,6 +42,11 @@ private struct WordProcessorCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
+            Button("New Code File") {
+                session.newCodeDocument()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+
             Button("Open...") {
                 session.openDocument()
             }
@@ -90,6 +95,11 @@ private struct WordProcessorCommands: Commands {
                 Button("Plain Text (.txt)") {
                     session.saveDocumentAs(preferredType: .plainText)
                 }
+
+                Button("\(session.codeLanguage.title) Source (.\(session.codeLanguage.preferredFilenameExtension))") {
+                    session.saveDocumentAs(preferredType: session.codeLanguage.contentType)
+                }
+                .disabled(session.authoringMode != .code)
 
                 Button("Mongrel Screenplay (.mgscreenplay)") {
                     session.saveDocumentAs(preferredType: .mongrelScreenplay)
@@ -166,6 +176,20 @@ private struct WordProcessorCommands: Commands {
                 session.resetEditorZoom()
             }
             .keyboardShortcut("0", modifiers: .command)
+        }
+
+        CommandMenu("Code") {
+            Button("Toggle Line Comment") {
+                session.toggleCodeComment()
+            }
+            .keyboardShortcut("/", modifiers: .command)
+            .disabled(session.authoringMode != .code || session.codeLanguage.lineCommentPrefix == nil)
+
+            Button("Duplicate Line or Selection") {
+                session.duplicateCodeLines()
+            }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .disabled(session.authoringMode != .code)
         }
 
         CommandMenu("Export") {

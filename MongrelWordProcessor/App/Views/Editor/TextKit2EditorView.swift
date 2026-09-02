@@ -80,12 +80,15 @@ struct TextKit2EditorView: NSViewRepresentable {
     let onEdit: () -> Void
     let onScreenplayElementChange: (ScreenplayElement) -> Void
     let onPaginationChange: (Int) -> Void
+    let onCodePositionChange: (Int, Int, Int) -> Void
     let bridge: FormattingBridge
     let companionLexicon: MongrelDictionaryCompanionLexicon
     let authoringMode: AuthoringMode
     let screenplayElement: ScreenplayElement
     let codeLanguage: CodeLanguage
     let codeTheme: CodeTheme
+    let codeFont: CodeFont
+    let codeFontSize: CGFloat
     let codeUseTabs: Bool
     let codeTabWidth: Int
     let codeLineWrap: Bool
@@ -144,6 +147,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.lastMode = authoringMode
         context.coordinator.lastLanguage = codeLanguage
         context.coordinator.lastTheme = codeTheme
+        context.coordinator.lastCodeFont = codeFont
+        context.coordinator.lastCodeFontSize = codeFontSize
         context.coordinator.lastScreenplayElement = screenplayElement
         context.coordinator.lastZoom = editorZoom
         context.coordinator.lastTypewriterMode = typewriterMode
@@ -155,6 +160,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.applyCompanionSpellings(to: textView, fullDocument: true)
         bridge.updateFormattingState(from: textView)
         context.coordinator.updateScreenplayPagination(for: textView)
+        context.coordinator.reportCodePosition(in: textView)
         context.coordinator.updateMagnification(editorZoom, in: scrollView)
         return scrollView
     }
@@ -164,9 +170,16 @@ struct TextKit2EditorView: NSViewRepresentable {
         guard !context.coordinator.isApplyingEdit else { return }
         context.coordinator.parent = self
 
-        if !textView.attributedString().isEqual(to: attributedText) {
+        let needsDocumentSync = authoringMode == .code
+            ? textView.string != attributedText.string
+            : !textView.attributedString().isEqual(to: attributedText)
+        if needsDocumentSync {
             context.coordinator.isApplyingEdit = true
             textView.textStorage?.setAttributedString(attributedText)
+            if authoringMode == .code {
+                context.coordinator.applyCodeHighlighting(to: textView)
+                context.coordinator.reportCodePosition(in: textView)
+            }
             context.coordinator.isApplyingEdit = false
         }
 
@@ -195,9 +208,14 @@ struct TextKit2EditorView: NSViewRepresentable {
             context.coordinator.updateScreenplayPagination(for: textView)
         }
 
-        if context.coordinator.lastLanguage != codeLanguage || context.coordinator.lastTheme != codeTheme {
+        if context.coordinator.lastLanguage != codeLanguage
+            || context.coordinator.lastTheme != codeTheme
+            || context.coordinator.lastCodeFont != codeFont
+            || context.coordinator.lastCodeFontSize != codeFontSize {
             context.coordinator.lastLanguage = codeLanguage
             context.coordinator.lastTheme = codeTheme
+            context.coordinator.lastCodeFont = codeFont
+            context.coordinator.lastCodeFontSize = codeFontSize
             if authoringMode == .code {
                 context.coordinator.applyCodeHighlighting(to: textView)
             }
@@ -236,7 +254,9 @@ struct TextKit2EditorView: NSViewRepresentable {
         var isApplyingEdit = false
         var lastMode: AuthoringMode = .prose
         var lastLanguage: CodeLanguage = .swift
-        var lastTheme: CodeTheme = .cobalt
+        var lastTheme: CodeTheme = .studio
+        var lastCodeFont: CodeFont = .systemMono
+        var lastCodeFontSize: CGFloat = 14
         var lastUseTabs: Bool = false
         var lastTabWidth: Int = 4
         var lastLineWrap: Bool = false
@@ -260,6 +280,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                 if shouldTriggerCompletion(in: textView) {
                     textView.complete(nil)
                 }
+                reportCodePosition(in: textView)
             }
 
             isApplyingEdit = true
@@ -287,6 +308,9 @@ struct TextKit2EditorView: NSViewRepresentable {
                 parent.onScreenplayElementChange(parent.bridge.activeScreenplayElement)
                 updateScreenplayPagination(for: textView)
             }
+            if parent.authoringMode == .code {
+                reportCodePosition(in: textView)
+            }
             if parent.typewriterMode {
                 centerSelection(in: textView)
             }
@@ -302,7 +326,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             guard prefix.count >= 2 else { return words }
 
             if parent.authoringMode == .code {
-                let matches = currentKeywords().filter { $0.hasPrefix(prefix) }
+                let matches = currentKeywords().filter { $0.lowercased().hasPrefix(prefix) }
                 return matches.isEmpty ? words : matches
             }
 
@@ -316,7 +340,56 @@ struct TextKit2EditorView: NSViewRepresentable {
             return merged
         }
 
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            guard parent.authoringMode == .code,
+                  let replacementString,
+                  (replacementString as NSString).length == 1,
+                  let edit = CodeTextEditing.insertClosingDelimiter(
+                    replacementString,
+                    in: textView.string,
+                    selection: affectedCharRange,
+                    tabWidth: parent.codeTabWidth
+                  ) else { return true }
+            applyCodeEdit(edit, to: textView)
+            return false
+        }
+
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if parent.authoringMode == .code {
+                switch commandSelector {
+                case #selector(NSResponder.insertNewline(_:)):
+                    applyCodeEdit(CodeTextEditing.insertNewline(
+                        in: textView.string,
+                        selection: textView.selectedRange(),
+                        language: parent.codeLanguage,
+                        useTabs: parent.codeUseTabs,
+                        tabWidth: parent.codeTabWidth
+                    ), to: textView)
+                    return true
+                case #selector(NSResponder.insertTab(_:)):
+                    applyCodeEdit(CodeTextEditing.indent(
+                        textView.string,
+                        selection: textView.selectedRange(),
+                        useTabs: parent.codeUseTabs,
+                        tabWidth: parent.codeTabWidth
+                    ), to: textView)
+                    return true
+                case #selector(NSResponder.insertBacktab(_:)):
+                    applyCodeEdit(CodeTextEditing.outdent(
+                        textView.string,
+                        selection: textView.selectedRange(),
+                        tabWidth: parent.codeTabWidth
+                    ), to: textView)
+                    return true
+                default:
+                    return false
+                }
+            }
+
             guard parent.authoringMode == .screenplay else { return false }
 
             switch commandSelector {
@@ -339,6 +412,21 @@ struct TextKit2EditorView: NSViewRepresentable {
             default:
                 return false
             }
+        }
+
+        func reportCodePosition(in textView: NSTextView) {
+            guard parent.authoringMode == .code else { return }
+            let position = CodeTextEditing.cursorPosition(in: textView.string, selection: textView.selectedRange())
+            parent.onCodePositionChange(position.line, position.column, position.selectionLength)
+        }
+
+        private func applyCodeEdit(_ edit: CodeEditResult, to textView: NSTextView) {
+            guard edit.text != textView.string else { return }
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            guard textView.shouldChangeText(in: fullRange, replacementString: edit.text) else { return }
+            textView.textStorage?.replaceCharacters(in: fullRange, with: edit.text)
+            textView.setSelectedRange(edit.selection)
+            textView.didChangeText()
         }
 
         func applyEditorMode(_ mode: AuthoringMode, to textView: NSTextView) {
@@ -376,6 +464,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.isContinuousSpellCheckingEnabled = false
                 textView.drawsBackground = false
                 applyStandardDocumentMetrics(to: textView)
+                textView.textContainerInset = NSSize(width: 28, height: 24)
                 if let scrollView = textView.enclosingScrollView {
                     applyLineWrap(parent.codeLineWrap, to: scrollView)
                 }
@@ -603,6 +692,12 @@ struct TextKit2EditorView: NSViewRepresentable {
                     "function", "const", "let", "var", "class", "import", "export", "return", "if", "else", "switch",
                     "case", "for", "while", "try", "catch", "finally", "async", "await", "new", "this"
                 ]
+            case .typescript:
+                return [
+                    "interface", "type", "namespace", "declare", "implements", "extends", "public", "private",
+                    "protected", "readonly", "function", "const", "let", "class", "import", "export", "return",
+                    "if", "else", "switch", "case", "for", "while", "try", "catch", "async", "await", "new", "this"
+                ]
             case .python:
                 return [
                     "def", "class", "import", "from", "return", "if", "elif", "else", "for", "while", "try", "except",
@@ -610,22 +705,77 @@ struct TextKit2EditorView: NSViewRepresentable {
                 ]
             case .json:
                 return ["true", "false", "null"]
+            case .html:
+                return [
+                    "html", "head", "body", "main", "section", "article", "header", "footer", "nav", "div", "span",
+                    "script", "style", "link", "meta", "form", "input", "button", "label", "table", "template"
+                ]
+            case .css:
+                return [
+                    "color", "background", "display", "position", "margin", "padding", "border", "width", "height",
+                    "grid", "flex", "font", "transform", "transition", "animation", "var", "calc", "important"
+                ]
+            case .shell:
+                return [
+                    "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac",
+                    "function", "in", "export", "local", "readonly", "return", "break", "continue"
+                ]
+            case .markdown:
+                return []
+            case .yaml:
+                return ["true", "false", "null", "yes", "no", "on", "off"]
+            case .sql:
+                return [
+                    "SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON", "GROUP", "ORDER",
+                    "BY", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE",
+                    "ALTER", "DROP", "TABLE", "VIEW", "INDEX", "AS", "AND", "OR", "NOT", "NULL", "BEGIN", "COMMIT"
+                ]
             }
         }
 
-        private func currentTheme() -> (base: NSColor, keyword: NSColor, string: NSColor, comment: NSColor, caret: NSColor) {
-            let appearance = MongrelAppearancePreferences.shared
-            if appearance.mode != .standard {
-                let text = NSColor(appearance.text)
-                return (text, text, text, text.withAlphaComponent(0.72), text)
-            }
+        private func currentTheme() -> (
+            base: NSColor,
+            keyword: NSColor,
+            string: NSColor,
+            comment: NSColor,
+            number: NSColor,
+            caret: NSColor
+        ) {
             switch parent.codeTheme {
+            case .studio:
+                return (
+                    NSColor(calibratedRed: 0.86, green: 0.88, blue: 0.91, alpha: 1),
+                    NSColor(calibratedRed: 0.45, green: 0.67, blue: 0.93, alpha: 1),
+                    NSColor(calibratedRed: 0.86, green: 0.67, blue: 0.42, alpha: 1),
+                    NSColor(calibratedRed: 0.47, green: 0.63, blue: 0.51, alpha: 1),
+                    NSColor(calibratedRed: 0.72, green: 0.61, blue: 0.88, alpha: 1),
+                    NSColor(calibratedRed: 0.55, green: 0.76, blue: 1.0, alpha: 1)
+                )
+            case .paper:
+                return (
+                    NSColor(calibratedRed: 0.13, green: 0.15, blue: 0.18, alpha: 1),
+                    NSColor(calibratedRed: 0.12, green: 0.31, blue: 0.62, alpha: 1),
+                    NSColor(calibratedRed: 0.52, green: 0.27, blue: 0.08, alpha: 1),
+                    NSColor(calibratedRed: 0.30, green: 0.43, blue: 0.32, alpha: 1),
+                    NSColor(calibratedRed: 0.45, green: 0.23, blue: 0.51, alpha: 1),
+                    NSColor(calibratedRed: 0.08, green: 0.35, blue: 0.72, alpha: 1)
+                )
+            case .midnight:
+                return (
+                    NSColor(calibratedRed: 0.94, green: 0.96, blue: 0.98, alpha: 1),
+                    NSColor(calibratedRed: 0.42, green: 0.78, blue: 1.0, alpha: 1),
+                    NSColor(calibratedRed: 1.0, green: 0.79, blue: 0.43, alpha: 1),
+                    NSColor(calibratedRed: 0.55, green: 0.76, blue: 0.59, alpha: 1),
+                    NSColor(calibratedRed: 0.82, green: 0.69, blue: 1.0, alpha: 1),
+                    NSColor.white
+                )
             case .cobalt:
                 return (
                     NSColor(calibratedRed: 0.88, green: 0.91, blue: 0.96, alpha: 1),
                     NSColor(calibratedRed: 0.47, green: 0.73, blue: 1.0, alpha: 1),
                     NSColor(calibratedRed: 0.94, green: 0.77, blue: 0.43, alpha: 1),
                     NSColor(calibratedRed: 0.53, green: 0.77, blue: 0.54, alpha: 1),
+                    NSColor(calibratedRed: 0.78, green: 0.64, blue: 0.98, alpha: 1),
                     NSColor(calibratedRed: 0.47, green: 0.73, blue: 1.0, alpha: 1)
                 )
             case .frost:
@@ -634,6 +784,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                     NSColor(calibratedRed: 0.39, green: 0.89, blue: 0.88, alpha: 1),
                     NSColor(calibratedRed: 0.99, green: 0.82, blue: 0.64, alpha: 1),
                     NSColor(calibratedRed: 0.62, green: 0.86, blue: 0.73, alpha: 1),
+                    NSColor(calibratedRed: 0.72, green: 0.73, blue: 1.0, alpha: 1),
                     NSColor(calibratedRed: 0.39, green: 0.89, blue: 0.88, alpha: 1)
                 )
             case .amber:
@@ -642,6 +793,7 @@ struct TextKit2EditorView: NSViewRepresentable {
                     NSColor(calibratedRed: 0.98, green: 0.67, blue: 0.23, alpha: 1),
                     NSColor(calibratedRed: 0.98, green: 0.84, blue: 0.54, alpha: 1),
                     NSColor(calibratedRed: 0.76, green: 0.86, blue: 0.52, alpha: 1),
+                    NSColor(calibratedRed: 0.91, green: 0.65, blue: 0.98, alpha: 1),
                     NSColor(calibratedRed: 0.98, green: 0.67, blue: 0.23, alpha: 1)
                 )
             }
@@ -649,24 +801,36 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         private func commentPattern() -> String {
             switch parent.codeLanguage {
-            case .python:
+            case .python, .shell, .yaml:
                 return "#.*"
             case .json:
                 return ""
-            case .swift, .javascript:
-                return "//.*"
+            case .swift, .javascript, .typescript, .css:
+                return "//.*|/\\*[\\s\\S]*?\\*/"
+            case .html, .markdown:
+                return "<!--[\\s\\S]*?-->"
+            case .sql:
+                return "--.*|/\\*[\\s\\S]*?\\*/"
             }
         }
 
         fileprivate func applyCodeHighlighting(to textView: NSTextView) {
             guard let storage = textView.textStorage else { return }
             let fullRange = NSRange(location: 0, length: storage.length)
-            guard fullRange.length > 0 else { return }
 
             let palette = currentTheme()
-            let baseFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            let baseFont = codeFont(weight: .regular)
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineHeightMultiple = 1.25
+            let typingAttributes: [NSAttributedString.Key: Any] = [
+                .font: baseFont,
+                .foregroundColor: palette.base,
+                .paragraphStyle: paragraph
+            ]
+            textView.typingAttributes = typingAttributes
+            textView.defaultParagraphStyle = paragraph
+            textView.insertionPointColor = palette.caret
+            guard fullRange.length > 0 else { return }
 
             storage.beginEditing()
             storage.setAttributes([
@@ -679,31 +843,53 @@ struct TextKit2EditorView: NSViewRepresentable {
             let keywords = currentKeywords()
             if !keywords.isEmpty {
                 let keywordPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
-                if let regex = try? NSRegularExpression(pattern: keywordPattern) {
+                let options: NSRegularExpression.Options = parent.codeLanguage == .sql ? [.caseInsensitive] : []
+                if let regex = try? NSRegularExpression(pattern: keywordPattern, options: options) {
                     regex.matches(in: source as String, range: fullRange).forEach { match in
                         storage.addAttribute(.foregroundColor, value: palette.keyword, range: match.range)
-                        storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold), range: match.range)
+                        storage.addAttribute(.font, value: codeFont(weight: .semibold), range: match.range)
                     }
                 }
             }
 
-            if let stringRegex = try? NSRegularExpression(pattern: "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'") {
-                stringRegex.matches(in: source as String, range: fullRange).forEach { match in
-                    storage.addAttribute(.foregroundColor, value: palette.string, range: match.range)
+            if let numberRegex = try? NSRegularExpression(pattern: "\\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\\.[0-9]+)?)\\b") {
+                numberRegex.matches(in: source as String, range: fullRange).forEach { match in
+                    storage.addAttribute(.foregroundColor, value: palette.number, range: match.range)
                 }
+            }
+
+            let stringRegex = try? NSRegularExpression(
+                pattern: "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`"
+            )
+            let stringMatches = stringRegex?.matches(in: source as String, range: fullRange) ?? []
+            stringMatches.forEach { match in
+                storage.addAttribute(.foregroundColor, value: palette.string, range: match.range)
             }
 
             let commentPattern = commentPattern()
             if !commentPattern.isEmpty,
                let commentRegex = try? NSRegularExpression(pattern: commentPattern, options: [.anchorsMatchLines]) {
                 commentRegex.matches(in: source as String, range: fullRange).forEach { match in
+                    let startsInsideString = stringMatches.contains { NSLocationInRange(match.range.location, $0.range) }
+                    guard !startsInsideString else { return }
                     storage.addAttribute(.foregroundColor, value: palette.comment, range: match.range)
                 }
             }
 
             storage.endEditing()
-            textView.typingAttributes[.font] = baseFont
-            textView.insertionPointColor = palette.caret
+        }
+
+        private func codeFont(weight: NSFont.Weight) -> NSFont {
+            let size = parent.codeFontSize
+            switch parent.codeFont {
+            case .systemMono:
+                return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+            case .menlo:
+                let name = weight.rawValue >= NSFont.Weight.semibold.rawValue ? "Menlo-Bold" : "Menlo-Regular"
+                return NSFont(name: name, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+            case .monaco:
+                return NSFont(name: "Monaco", size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+            }
         }
     }
 }

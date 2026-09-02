@@ -134,9 +134,16 @@ struct WordProcessorContentView: View {
                     .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
                     .textCase(.uppercase)
 
-                statLine("Words", value: "\(session.wordCount)")
-                statLine("Characters", value: "\(session.charCount)")
-                statLine("Spellcheck", value: session.companionSpellcheckDetail)
+                if session.authoringMode == .code {
+                    statLine("Lines", value: "\(session.codeLineCount)")
+                    statLine("Characters", value: "\(session.charCount)")
+                    statLine("Language", value: session.codeLanguage.title)
+                    statLine("Indentation", value: session.codeIndentationSummary)
+                } else {
+                    statLine("Words", value: "\(session.wordCount)")
+                    statLine("Characters", value: "\(session.charCount)")
+                    statLine("Spellcheck", value: session.companionSpellcheckDetail)
+                }
                 if session.authoringMode == .screenplay {
                     statLine("Pages", value: "\(session.screenplayPageCount)")
                     statLine("Scenes", value: "\(session.screenplaySceneCount)")
@@ -270,6 +277,9 @@ struct WordProcessorContentView: View {
                 Button("New Screenplay") {
                     session.newScreenplay()
                 }
+                Button("New Code File") {
+                    session.newCodeDocument()
+                }
             } label: {
                 Text("New")
             }
@@ -341,37 +351,6 @@ struct WordProcessorContentView: View {
                     .foregroundStyle(DesignTokens.accent)
                 }
                 .menuStyle(.borderlessButton)
-
-                Divider()
-                    .frame(height: 16)
-                    .padding(.horizontal, 2)
-
-                Button(session.codeUseTabs ? "Tabs" : "Spaces") {
-                    session.codeUseTabs.toggle()
-                }
-                .buttonStyle(.plain)
-                .controlSize(.small)
-                .foregroundStyle(DesignTokens.chromeText.opacity(0.85))
-
-                Menu {
-                    ForEach([2, 4, 8], id: \.self) { w in
-                        Button("\(w)") { session.codeTabWidth = w }
-                    }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "ruler")
-                        Text("\(session.codeTabWidth)")
-                    }
-                    .foregroundStyle(DesignTokens.accent)
-                }
-                .menuStyle(.borderlessButton)
-
-                Button(session.codeLineWrap ? "Wrap: On" : "Wrap: Off") {
-                    session.codeLineWrap.toggle()
-                }
-                .buttonStyle(.plain)
-                .controlSize(.small)
-                .foregroundStyle(DesignTokens.chromeText.opacity(0.85))
             } else if session.authoringMode == .screenplay {
                 Menu {
                     ForEach(ScreenplayViewStyle.allCases) { style in
@@ -413,52 +392,54 @@ struct WordProcessorContentView: View {
                 .menuStyle(.borderlessButton)
             }
 
-            Divider()
-                .frame(height: 18)
+            if session.authoringMode != .code {
+                Divider()
+                    .frame(height: 18)
 
-            Button {
-                showPageLayout = true
-            } label: {
-                Label("Page Layout", systemImage: "doc.badge.gearshape")
-                    .foregroundStyle(DesignTokens.chromeText.opacity(0.88))
-            }
-            .buttonStyle(.plain)
-            .disabled(session.authoringMode == .code)
-            .help(
-                session.authoringMode == .code
-                    ? "Page layout is not used in code mode"
-                    : "Page colors, headers, footers, page fields, and artwork"
-            )
+                Button {
+                    showPageLayout = true
+                } label: {
+                    Label("Page Layout", systemImage: "doc.badge.gearshape")
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.88))
+                }
+                .buttonStyle(.plain)
+                .help("Page colors, headers, footers, page fields, and artwork")
 
-            Button {
-                session.formattingBridge.insertImageAttachment()
-            } label: {
-                Image(systemName: "photo.badge.plus")
-                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                Button {
+                    session.formattingBridge.insertImageAttachment()
+                } label: {
+                    Image(systemName: "photo.badge.plus")
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                }
+                .buttonStyle(.plain)
+                .help("Insert image (PNG, JPEG, HEIC, TIFF, GIF, or PDF)")
             }
-            .buttonStyle(.plain)
-            .help("Insert image (PNG, JPEG, HEIC, TIFF, GIF, or PDF)")
-            .disabled(session.authoringMode == .code)
 
             Menu {
                 Button("Save a Copy...") {
                     session.saveDocumentCopyAs()
                 }
-                Divider()
-                Button("Export as PDF...") {
-                    session.exportAsPDF()
-                }
-                Button("Export as RTF...") {
-                    session.exportAsRTF()
-                }
-                Button("Export as RTFD with Attachments...") {
-                    session.exportAsRTFD()
-                }
-                Button("Export as Word (.docx)...") {
-                    session.exportAsWordDocument()
-                }
-                Button("Export as Plain Text...") {
-                    session.exportAsPlainText()
+                if session.authoringMode == .code {
+                    Button("Export as Plain Text...") {
+                        session.exportAsPlainText()
+                    }
+                } else {
+                    Divider()
+                    Button("Export as PDF...") {
+                        session.exportAsPDF()
+                    }
+                    Button("Export as RTF...") {
+                        session.exportAsRTF()
+                    }
+                    Button("Export as RTFD with Attachments...") {
+                        session.exportAsRTFD()
+                    }
+                    Button("Export as Word (.docx)...") {
+                        session.exportAsWordDocument()
+                    }
+                    Button("Export as Plain Text...") {
+                        session.exportAsPlainText()
+                    }
                 }
                 Divider()
                 Button("Print...") {
@@ -483,23 +464,25 @@ struct WordProcessorContentView: View {
             .help("Focus mode")
             .keyboardShortcut("f", modifiers: [.command, .shift])
 
-            Button {
-                showDocumentInsights = true
-            } label: {
-                Image(systemName: "chart.bar.xaxis")
-                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
-            }
-            .buttonStyle(.plain)
-            .help("Document insights")
+            if session.authoringMode != .code {
+                Button {
+                    showDocumentInsights = true
+                } label: {
+                    Image(systemName: "chart.bar.xaxis")
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                }
+                .buttonStyle(.plain)
+                .help("Document insights")
 
-            Button {
-                showWritingTools = true
-            } label: {
-                Image(systemName: "text.badge.checkmark")
-                    .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                Button {
+                    showWritingTools = true
+                } label: {
+                    Image(systemName: "text.badge.checkmark")
+                        .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                }
+                .buttonStyle(.plain)
+                .help("Spelling and grammar tools")
             }
-            .buttonStyle(.plain)
-            .help("Spelling and grammar tools")
 
             Button {
                 showCommandPalette = true
@@ -543,8 +526,10 @@ struct WordProcessorContentView: View {
         HStack(spacing: 6) {
             if session.authoringMode == .screenplay {
                 screenplayToolbar
+            } else if session.authoringMode == .code {
+                codeToolbar
             } else {
-                proseAndCodeToolbar
+                proseToolbar
             }
 
             Spacer()
@@ -564,7 +549,94 @@ struct WordProcessorContentView: View {
         .background(DesignTokens.glassBase.opacity(0.58))
     }
 
-    private var proseAndCodeToolbar: some View {
+    private var codeToolbar: some View {
+        Group {
+            Menu {
+                Section("Typeface") {
+                    ForEach(CodeFont.allCases, id: \.rawValue) { font in
+                        Button {
+                            session.codeFont = font
+                        } label: {
+                            if session.codeFont == font {
+                                Label(font.title, systemImage: "checkmark")
+                            } else {
+                                Text(font.title)
+                            }
+                        }
+                    }
+                }
+
+                Section("Size") {
+                    ForEach([11, 12, 13, 14, 15, 16, 18, 20, 22, 24], id: \.self) { size in
+                        Button {
+                            session.codeFontSize = CGFloat(size)
+                        } label: {
+                            if Int(session.codeFontSize) == size {
+                                Label("\(size) pt", systemImage: "checkmark")
+                            } else {
+                                Text("\(size) pt")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label("\(session.codeFont.title) \(Int(session.codeFontSize))", systemImage: "textformat")
+                    .foregroundStyle(DesignTokens.accent)
+            }
+            .menuStyle(.borderlessButton)
+
+            Divider().frame(height: 14)
+
+            Button(session.codeUseTabs ? "Tabs" : "Spaces") {
+                session.codeUseTabs.toggle()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(DesignTokens.chromeText.opacity(0.85))
+
+            Menu {
+                ForEach([2, 4, 8], id: \.self) { width in
+                    Button("\(width) columns") { session.codeTabWidth = width }
+                }
+            } label: {
+                Label("Width \(session.codeTabWidth)", systemImage: "ruler")
+                    .foregroundStyle(DesignTokens.accent)
+            }
+            .menuStyle(.borderlessButton)
+
+            Button(session.codeLineWrap ? "Wrap On" : "Wrap Off") {
+                session.codeLineWrap.toggle()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(DesignTokens.chromeText.opacity(0.85))
+
+            Divider().frame(height: 14)
+
+            Button {
+                session.toggleCodeComment()
+            } label: {
+                Label("Comment", systemImage: "text.badge.minus")
+            }
+            .buttonStyle(.plain)
+            .disabled(session.codeLanguage.lineCommentPrefix == nil)
+            .help("Toggle line comment (Cmd-/)")
+
+            Button {
+                session.duplicateCodeLines()
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            .buttonStyle(.plain)
+            .help("Duplicate line or selected lines (Cmd-Shift-D)")
+
+            Divider().frame(height: 14)
+
+            Text("Tab / Shift-Tab indents")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.58))
+        }
+    }
+
+    private var proseToolbar: some View {
         Group {
             formatButton("B", isActive: session.formattingBridge.isBold)        { session.formattingBridge.bold() }
             formatButton("I", isActive: session.formattingBridge.isItalic)      { session.formattingBridge.italic() }
@@ -774,12 +846,17 @@ struct WordProcessorContentView: View {
             onPaginationChange: { count in
                 session.updateRenderedScreenplayPageCount(count)
             },
+            onCodePositionChange: { line, column, selectionLength in
+                session.updateCodeCursor(line: line, column: column, selectionLength: selectionLength)
+            },
             bridge: session.formattingBridge,
             companionLexicon: session.companionLexicon,
             authoringMode: session.authoringMode,
             screenplayElement: session.screenplayElement,
             codeLanguage: session.codeLanguage,
             codeTheme: session.codeTheme,
+            codeFont: session.codeFont,
+            codeFontSize: session.codeFontSize,
             codeUseTabs: session.codeUseTabs,
             codeTabWidth: session.codeTabWidth,
             codeLineWrap: session.codeLineWrap,
@@ -858,13 +935,29 @@ struct WordProcessorContentView: View {
 
     private var statusBar: some View {
         HStack {
-            Text("\(session.wordCount) words")
-            Text("·")
-            Text("\(session.charCount) characters")
-            Text("·")
-            Text(session.authoringMode.title)
-            Text("·")
-            Text(session.companionSpellcheckSummary)
+            if session.authoringMode == .code {
+                Text("\(session.codeLineCount) lines")
+                Text("·")
+                Text("\(session.charCount) characters")
+                Text("·")
+                Text(session.codeLanguage.title)
+                Text("·")
+                Text(session.codeIndentationSummary)
+                Text("·")
+                Text("Ln \(session.codeCursorLine), Col \(session.codeCursorColumn)")
+                if session.codeSelectionLength > 0 {
+                    Text("·")
+                    Text("\(session.codeSelectionLength) selected")
+                }
+            } else {
+                Text("\(session.wordCount) words")
+                Text("·")
+                Text("\(session.charCount) characters")
+                Text("·")
+                Text(session.authoringMode.title)
+                Text("·")
+                Text(session.companionSpellcheckSummary)
+            }
             if session.authoringMode == .screenplay {
                 Text("·")
                 Text(screenplayPageSummary)
@@ -968,10 +1061,10 @@ struct WordProcessorContentView: View {
 
     private var emptyDocumentHint: some View {
         VStack(spacing: 9) {
-            Image(systemName: session.authoringMode == .screenplay ? "film.stack" : "text.cursor")
+            Image(systemName: emptyDocumentSymbol)
                 .font(.system(size: 24, weight: .light))
                 .foregroundStyle(DesignTokens.accent.opacity(0.72))
-            Text(session.authoringMode == .screenplay ? "Begin with a scene heading" : "Click anywhere and begin writing")
+            Text(emptyDocumentTitle)
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(DesignTokens.chromeText.opacity(0.68))
             Text(emptyDocumentDetail)
@@ -994,7 +1087,26 @@ struct WordProcessorContentView: View {
         if session.authoringMode == .screenplay {
             return "Try INT. or EXT. · Tab changes element"
         }
+        if session.authoringMode == .code {
+            return "Tab indents · Cmd-/ comments · Cmd-Shift-D duplicates"
+        }
         return "Cmd-S saves · Cmd-Shift-F enters focus mode"
+    }
+
+    private var emptyDocumentSymbol: String {
+        switch session.authoringMode {
+        case .prose: return "text.cursor"
+        case .code: return "chevron.left.forwardslash.chevron.right"
+        case .screenplay: return "film.stack"
+        }
+    }
+
+    private var emptyDocumentTitle: String {
+        switch session.authoringMode {
+        case .prose: return "Click anywhere and begin writing"
+        case .code: return "Start a \(session.codeLanguage.title) file"
+        case .screenplay: return "Begin with a scene heading"
+        }
     }
 
     private func setFocusMode(_ enabled: Bool) {
@@ -1096,6 +1208,12 @@ struct WordProcessorContentView: View {
 
     private var codeBackground: (Color, Color) {
         switch session.codeTheme {
+        case .studio:
+            return (Color(red: 0.075, green: 0.082, blue: 0.095), Color(red: 0.18, green: 0.21, blue: 0.25))
+        case .paper:
+            return (Color(red: 0.96, green: 0.95, blue: 0.91), Color(red: 0.72, green: 0.80, blue: 0.86))
+        case .midnight:
+            return (Color(red: 0.012, green: 0.016, blue: 0.022), Color(red: 0.08, green: 0.18, blue: 0.26))
         case .cobalt:
             return (Color(red: 0.09, green: 0.11, blue: 0.14), Color(red: 0.20, green: 0.31, blue: 0.42))
         case .frost:
@@ -1147,11 +1265,13 @@ struct WordProcessorContentView: View {
             shortcutSection(
                 "Code Mode",
                 items: [
-                    ("Mode: Code", "Monospace + syntax color"),
-                    ("Language Menu", "Swift/JS/Python/JSON presets"),
+                    ("Cmd + Option + N", "New code file"),
+                    ("Tab / Shift + Tab", "Indent / outdent"),
+                    ("Cmd + /", "Toggle line comment"),
+                    ("Cmd + Shift + D", "Duplicate selected lines"),
+                    ("Language Menu", "Choose language or format"),
                     ("Theme Menu", "Cobalt/Frost/Amber themes"),
-                    ("Esc", "Dismiss completion popup"),
-                    ("Tab/Enter", "Accept completion")
+                    ("Esc", "Dismiss completion popup")
                 ]
             )
 
@@ -1197,6 +1317,8 @@ struct WordProcessorContentView: View {
             session.newDocument()
         case .newScreenplay:
             session.newScreenplay()
+        case .newCodeDocument:
+            session.newCodeDocument()
         case .openDocument:
             session.openDocument()
         case .saveDocument:
@@ -1220,6 +1342,10 @@ struct WordProcessorContentView: View {
         case .autoFormatScreenplay:
             session.authoringMode = .screenplay
             session.formattingBridge.autoFormatEntireScreenplay()
+        case .toggleCodeComment:
+            session.toggleCodeComment()
+        case .duplicateCodeLines:
+            session.duplicateCodeLines()
         case .setMode(let mode):
             session.authoringMode = mode
         case .setScreenplayElement(let element):
@@ -1798,6 +1924,7 @@ private struct WritingToolsView: View {
 private enum WordProcessorPaletteAction: Hashable {
     case newDocument
     case newScreenplay
+    case newCodeDocument
     case openDocument
     case saveDocument
     case saveCopy
@@ -1809,6 +1936,8 @@ private enum WordProcessorPaletteAction: Hashable {
     case resetZoom
     case clearRecentDocuments
     case autoFormatScreenplay
+    case toggleCodeComment
+    case duplicateCodeLines
     case setMode(AuthoringMode)
     case setScreenplayElement(ScreenplayElement)
     case setLanguage(CodeLanguage)
@@ -1818,6 +1947,7 @@ private enum WordProcessorPaletteAction: Hashable {
         switch self {
         case .newDocument: return "New Document"
         case .newScreenplay: return "New Screenplay"
+        case .newCodeDocument: return "New Code File"
         case .openDocument: return "Open Document"
         case .saveDocument: return "Save Document"
         case .saveCopy: return "Save a Copy"
@@ -1829,6 +1959,8 @@ private enum WordProcessorPaletteAction: Hashable {
         case .resetZoom: return "Actual Size"
         case .clearRecentDocuments: return "Clear Recent Documents"
         case .autoFormatScreenplay: return "Screenplay: Auto Format Document"
+        case .toggleCodeComment: return "Code: Toggle Line Comment"
+        case .duplicateCodeLines: return "Code: Duplicate Lines"
         case .setMode(let mode): return "Authoring Mode: \(mode.title)"
         case .setScreenplayElement(let element): return "Screenplay Element: \(element.title)"
         case .setLanguage(let language): return "Code Language: \(language.title)"
@@ -1840,6 +1972,7 @@ private enum WordProcessorPaletteAction: Hashable {
         switch self {
         case .newDocument: return "doc.badge.plus"
         case .newScreenplay: return "film.stack"
+        case .newCodeDocument: return "chevron.left.forwardslash.chevron.right"
         case .openDocument: return "folder"
         case .saveDocument: return "square.and.arrow.down"
         case .saveCopy: return "doc.on.doc"
@@ -1851,6 +1984,8 @@ private enum WordProcessorPaletteAction: Hashable {
         case .resetZoom: return "1.magnifyingglass"
         case .clearRecentDocuments: return "clock.arrow.circlepath"
         case .autoFormatScreenplay: return "wand.and.stars"
+        case .toggleCodeComment: return "text.badge.minus"
+        case .duplicateCodeLines: return "plus.square.on.square"
         case .setMode: return "rectangle.2.swap"
         case .setScreenplayElement: return "film"
         case .setLanguage: return "chevron.left.forwardslash.chevron.right"
@@ -1909,11 +2044,12 @@ private struct WordProcessorCommandPaletteView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let match: (WordProcessorPaletteAction) -> Bool = { q.isEmpty || fuzzyMatches(q, in: $0.title) }
 
-        let fileItems  = [WordProcessorPaletteAction.newDocument, .newScreenplay, .openDocument, .saveDocument, .saveCopy, .printDocument, .clearRecentDocuments].filter(match)
+        let fileItems  = [WordProcessorPaletteAction.newDocument, .newScreenplay, .newCodeDocument, .openDocument, .saveDocument, .saveCopy, .printDocument, .clearRecentDocuments].filter(match)
         let writingItems = [WordProcessorPaletteAction.toggleFocusMode, .toggleTypewriterMode, .zoomIn, .zoomOut, .resetZoom].filter(match)
         let modeItems  = AuthoringMode.allCases.map { WordProcessorPaletteAction.setMode($0) }.filter(match)
         let screenplayItems = ([WordProcessorPaletteAction.autoFormatScreenplay]
             + ScreenplayElement.allCases.map { WordProcessorPaletteAction.setScreenplayElement($0) }).filter(match)
+        let codeItems = [WordProcessorPaletteAction.toggleCodeComment, .duplicateCodeLines].filter(match)
         let langItems  = CodeLanguage.allCases.map { WordProcessorPaletteAction.setLanguage($0) }.filter(match)
         let themeItems = CodeTheme.allCases.map { WordProcessorPaletteAction.setTheme($0) }.filter(match)
 
@@ -1922,6 +2058,7 @@ private struct WordProcessorCommandPaletteView: View {
         if !writingItems.isEmpty { sections.append(PaletteSection(title: "Writing", items: writingItems)) }
         if !modeItems.isEmpty  { sections.append(PaletteSection(title: "Mode",       items: modeItems))  }
         if !screenplayItems.isEmpty { sections.append(PaletteSection(title: "Screenplay", items: screenplayItems)) }
+        if !codeItems.isEmpty { sections.append(PaletteSection(title: "Code", items: codeItems)) }
         if !langItems.isEmpty  { sections.append(PaletteSection(title: "Language",   items: langItems))  }
         if !themeItems.isEmpty { sections.append(PaletteSection(title: "Theme",      items: themeItems)) }
         return sections

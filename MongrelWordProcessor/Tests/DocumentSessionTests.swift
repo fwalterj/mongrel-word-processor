@@ -218,6 +218,80 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testNewCodeDocumentUsesPersistedLanguageAndStartsClean() {
+        defaults.set(CodeLanguage.python.rawValue, forKey: "wordprocessor.codeLanguage")
+        let session = makeSession()
+
+        session.newCodeDocument()
+
+        XCTAssertEqual(session.title, "Untitled Code")
+        XCTAssertEqual(session.authoringMode, .code)
+        XCTAssertEqual(session.codeLanguage, .python)
+        XCTAssertEqual(session.attributedText.length, 0)
+        XCTAssertNil(session.currentURL)
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testSourceFileOpeningDetectsLanguageAndPreservesExtensionOnSave() throws {
+        let destination = temporaryDirectory.appendingPathComponent("component.tsx")
+        try "const value: number = 3\n".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        XCTAssertEqual(session.authoringMode, .code)
+        XCTAssertEqual(session.codeLanguage, .typescript)
+        XCTAssertEqual(session.currentURL?.pathExtension, "tsx")
+
+        session.attributedText = NSAttributedString(string: "const value: number = 4\n")
+        session.markDirty()
+        session.saveDocument()
+
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "const value: number = 4\n")
+        XCTAssertEqual(session.currentURL?.pathExtension, "tsx")
+    }
+
+    @MainActor
+    func testExtensionlessShebangScriptOpensInCodeMode() throws {
+        let destination = temporaryDirectory.appendingPathComponent("release")
+        try "#!/bin/zsh\necho ready\n".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        XCTAssertEqual(session.authoringMode, .code)
+        XCTAssertEqual(session.codeLanguage, .shell)
+        XCTAssertEqual(session.currentURL?.lastPathComponent, "release")
+    }
+
+    @MainActor
+    func testCodePreferencesPersistAcrossSessionsAndNormalizeTabWidth() {
+        let first = makeSession()
+        first.codeLanguage = .sql
+        first.codeTheme = .amber
+        first.codeFont = .menlo
+        first.codeFontSize = 18
+        first.codeUseTabs = true
+        first.codeTabWidth = 8
+        first.codeLineWrap = true
+
+        let reopened = makeSession()
+
+        XCTAssertEqual(reopened.codeLanguage, .sql)
+        XCTAssertEqual(reopened.codeTheme, .amber)
+        XCTAssertEqual(reopened.codeFont, .menlo)
+        XCTAssertEqual(reopened.codeFontSize, 18)
+        XCTAssertTrue(reopened.codeUseTabs)
+        XCTAssertEqual(reopened.codeTabWidth, 8)
+        XCTAssertEqual(reopened.codeIndentationSummary, "Tabs · 8 columns")
+        XCTAssertTrue(reopened.codeLineWrap)
+
+        reopened.codeTabWidth = 3
+        XCTAssertEqual(reopened.codeTabWidth, 4)
+        reopened.codeFontSize = 30
+        XCTAssertEqual(reopened.codeFontSize, 24)
+    }
+
+    @MainActor
     func testOpenPanelSupportsNativeScreenplaysAndCommonTextFormats() {
         let openTypeIdentifiers = Set(DocumentSession.openableDocumentTypes.map(\.identifier))
 
@@ -226,6 +300,7 @@ final class DocumentSessionTests: XCTestCase {
             Set([
                 UTType.mongrelDocument.identifier,
                 UTType.mongrelScreenplay.identifier,
+                UTType.sourceCode.identifier,
                 UTType.rtfd.identifier,
                 UTType.rtf.identifier,
                 UTType.wordDocument.identifier,
@@ -271,6 +346,23 @@ final class DocumentSessionTests: XCTestCase {
             ) as? NSTextAttachment
         )
         XCTAssertFalse(reopened.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testNativeCodeDocumentRoundTripPreservesLanguage() throws {
+        let source = makeSession()
+        source.newCodeDocument()
+        source.codeLanguage = .yaml
+        source.attributedText = NSAttributedString(string: "service:\n  enabled: true\n")
+        let destination = temporaryDirectory.appendingPathComponent("Configuration.mongreldoc")
+
+        XCTAssertTrue(source.saveDocument(to: destination, type: .mongrelDocument))
+
+        let reopened = makeSession()
+        XCTAssertTrue(reopened.openDocument(at: destination))
+        XCTAssertEqual(reopened.authoringMode, .code)
+        XCTAssertEqual(reopened.codeLanguage, .yaml)
+        XCTAssertEqual(reopened.attributedText.string, "service:\n  enabled: true\n")
     }
 
     @MainActor

@@ -24,8 +24,10 @@
 		C4A539EBDC90AB9F26144E34 /* PDFKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C7093040F437F963784527C3 /* PDFKit.framework */; };
 		D5697C50F9C6ABD7570650E3 /* SharedFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B2D62DE8E2BC72FF84BA1FEB /* SharedFoundation */; };
 		E5AA739B25FCBD1741C0A4A9 /* DocumentPageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 680F8C98B5D7E097E022414A /* DocumentPageLayout.swift */; };
+		E858139410B8F8FE683FD783 /* CodeTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B279481BD525EE1D69AEF9 /* CodeTextEditing.swift */; };
 		F41B7DA167516ECFD0F92E1F /* spellcheck_dictionary.txt in Resources */ = {isa = PBXBuildFile; fileRef = DCAB1A511A844BF112352251 /* spellcheck_dictionary.txt */; };
 		F502D8BCBB6E72F6C1FE4FEF /* MongrelDictionaryCompanionLexicon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */; };
+		F5F44B702721EE718AA6EE17 /* CodeTextEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 651AB30B5228FD32096E0FF3 /* CodeTextEditingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,6 +45,7 @@
 		3B586887675402518D3AA9CC /* MongrelWordProcessor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MongrelWordProcessor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		48C1ABAEF2F2E9CFB5E505B3 /* MongrelWordProcessorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelWordProcessorApp.swift; sourceTree = "<group>"; };
 		562CED398C2ACCE4999CAE0A /* MongrelWordProcessorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MongrelWordProcessorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		651AB30B5228FD32096E0FF3 /* CodeTextEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextEditingTests.swift; sourceTree = "<group>"; };
 		680F8C98B5D7E097E022414A /* DocumentPageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPageLayout.swift; sourceTree = "<group>"; };
 		73F4D21005E34B993817D1ED /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelDictionaryCompanionLexicon.swift; sourceTree = "<group>"; };
@@ -51,6 +54,7 @@
 		9FE5111C57E694E5AFD1F9AA /* ScreenplayEditorIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenplayEditorIntegrationTests.swift; sourceTree = "<group>"; };
 		A4B7890093DB9A8A0D29CE6F /* FormattingBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormattingBridge.swift; sourceTree = "<group>"; };
 		C13F4C79F47394355F17C647 /* WordProcessorContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordProcessorContentView.swift; sourceTree = "<group>"; };
+		C3B279481BD525EE1D69AEF9 /* CodeTextEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextEditing.swift; sourceTree = "<group>"; };
 		C7093040F437F963784527C3 /* PDFKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PDFKit.framework; path = System/Library/Frameworks/PDFKit.framework; sourceTree = SDKROOT; };
 		CC1E2B431E92C543C298EDBA /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 		CFF5DD9012A3687781D6CD77 /* ManagedFontLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedFontLibrary.swift; sourceTree = "<group>"; };
@@ -109,6 +113,7 @@
 		694DE38A2AEA8E6049789621 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				C3B279481BD525EE1D69AEF9 /* CodeTextEditing.swift */,
 				E4029374F51E2EBC1FBB4DD7 /* DocumentInsightsAnalyzer.swift */,
 				3228FB88B36A352605F4B9FF /* LocalLanguageToolClient.swift */,
 				CFF5DD9012A3687781D6CD77 /* ManagedFontLibrary.swift */,
@@ -165,6 +170,7 @@
 		D11AFF67C572471A40217D7D /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				651AB30B5228FD32096E0FF3 /* CodeTextEditingTests.swift */,
 				8D7FA82DE8AFE4EF5F4B9A7D /* DocumentSessionTests.swift */,
 				9FE5111C57E694E5AFD1F9AA /* ScreenplayEditorIntegrationTests.swift */,
 				E215E0B5B604D902785D281C /* ScreenplayFormattingTests.swift */,
@@ -296,6 +302,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F5F44B702721EE718AA6EE17 /* CodeTextEditingTests.swift in Sources */,
 				50B5587AB71C4B3764EB8EDF /* DocumentSessionTests.swift in Sources */,
 				549C51CF3BA8A998E4C0D30C /* ScreenplayEditorIntegrationTests.swift in Sources */,
 				18003229C045B59F29AD8970 /* ScreenplayFormattingTests.swift in Sources */,
@@ -306,6 +313,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E858139410B8F8FE683FD783 /* CodeTextEditing.swift in Sources */,
 				7D1E5DB7AD0818FC8E44C7BF /* DocumentInsightsAnalyzer.swift in Sources */,
 				E5AA739B25FCBD1741C0A4A9 /* DocumentPageLayout.swift in Sources */,
 				0D7BF7893436D9F227282165 /* DocumentSession.swift in Sources */,
