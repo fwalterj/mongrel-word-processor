@@ -233,6 +233,136 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceTabsRestoreMixedModeProjectsIndependently() throws {
+        let session = makeSession()
+        session.attributedText = NSAttributedString(string: "Prose notes")
+        session.markDirty()
+        let proseID = session.activeTabID
+
+        session.newScreenplay()
+        let screenplayID = session.activeTabID
+        session.attributedText = NSAttributedString(string: "INT. STUDIO - NIGHT\n")
+        session.pageLayout.header.isEnabled = true
+        session.pageLayout.header.text = "Private draft"
+        session.markDirty()
+
+        session.newCodeDocument()
+        let codeID = session.activeTabID
+        session.codeLanguage = .sql
+        session.attributedText = NSAttributedString(string: "print(\"ready\")\n")
+        session.markDirty()
+
+        XCTAssertEqual(session.workspaceTabs.count, 3)
+        XCTAssertEqual(session.authoringMode, .code)
+
+        session.switchToTab(try XCTUnwrap(proseID))
+        XCTAssertEqual(session.authoringMode, .prose)
+        XCTAssertEqual(session.attributedText.string, "Prose notes")
+        XCTAssertTrue(session.hasUnsavedChanges)
+
+        session.switchToTab(try XCTUnwrap(screenplayID))
+        XCTAssertEqual(session.authoringMode, .screenplay)
+        XCTAssertEqual(session.attributedText.string, "INT. STUDIO - NIGHT\n")
+        XCTAssertEqual(session.pageLayout.header.text, "Private draft")
+
+        session.switchToTab(try XCTUnwrap(codeID))
+        XCTAssertEqual(session.authoringMode, .code)
+        XCTAssertEqual(session.codeLanguage, .sql)
+        XCTAssertEqual(session.attributedText.string, "print(\"ready\")\n")
+    }
+
+    @MainActor
+    func testAutosaveOnTabSwitchSavesNamedDocumentWithoutPrompt() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Autosave.txt")
+        let session = makeSession()
+        session.attributedText = NSAttributedString(string: "First")
+        XCTAssertTrue(session.saveDocument(to: destination, type: .plainText))
+
+        session.attributedText = NSAttributedString(string: "Second")
+        session.markDirty()
+        session.autosaveOnTabSwitch = true
+        session.newScreenplay()
+
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "Second")
+        let savedTab = try XCTUnwrap(session.workspaceTabs.first(where: { $0.url == destination }))
+        XCTAssertFalse(savedTab.isDirty)
+        XCTAssertEqual(session.authoringMode, .screenplay)
+        XCTAssertTrue(makeSession().autosaveOnTabSwitch)
+    }
+
+    @MainActor
+    func testUntitledDirtyTabSurvivesSwitchWithoutForcingSavePanel() throws {
+        let session = makeSession()
+        session.autosaveOnTabSwitch = true
+        session.attributedText = NSAttributedString(string: "Unfiled thought")
+        session.markDirty()
+        let untitledID = try XCTUnwrap(session.activeTabID)
+
+        session.newCodeDocument()
+        XCTAssertEqual(session.workspaceTabs.count, 2)
+
+        session.switchToTab(untitledID)
+        XCTAssertEqual(session.attributedText.string, "Unfiled thought")
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertNil(session.currentURL)
+    }
+
+    @MainActor
+    func testTabSwitchRestoresCaretLocation() throws {
+        let session = makeSession()
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 500, height: 400))
+        textView.string = "First workspace"
+        session.formattingBridge.textView = textView
+        session.attributedText = NSAttributedString(string: textView.string)
+        session.markDirty()
+        textView.setSelectedRange(NSRange(location: 6, length: 3))
+        let firstID = try XCTUnwrap(session.activeTabID)
+
+        session.newCodeDocument()
+        textView.string = "let value = 1"
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        session.switchToTab(firstID)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 6, length: 3))
+    }
+
+    @MainActor
+    func testOpeningAnAlreadyOpenFileFocusesItsExistingTab() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Existing.py")
+        try "print('one')\n".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        let sourceID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+        XCTAssertEqual(session.workspaceTabs.count, 2)
+
+        XCTAssertTrue(session.openDocument(at: destination))
+        XCTAssertEqual(session.activeTabID, sourceID)
+        XCTAssertEqual(session.workspaceTabs.count, 2)
+        XCTAssertEqual(session.authoringMode, .code)
+    }
+
+    @MainActor
+    func testCleanClosedTabCanBeReopened() throws {
+        let session = makeSession()
+        session.newScreenplay()
+        let destination = temporaryDirectory.appendingPathComponent("Closed.mgscreenplay")
+        XCTAssertTrue(session.saveDocument(to: destination, type: .mongrelScreenplay))
+        let screenplayID = try XCTUnwrap(session.activeTabID)
+        session.newCodeDocument()
+
+        session.closeTab(screenplayID)
+        XCTAssertFalse(session.workspaceTabs.contains(where: { $0.id == screenplayID }))
+        XCTAssertTrue(session.canReopenClosedTab)
+
+        session.reopenClosedTab()
+        XCTAssertEqual(session.activeTabID, screenplayID)
+        XCTAssertEqual(session.authoringMode, .screenplay)
+    }
+
+    @MainActor
     func testSourceFileOpeningDetectsLanguageAndPreservesExtensionOnSave() throws {
         let destination = temporaryDirectory.appendingPathComponent("component.tsx")
         try "const value: number = 3\n".write(to: destination, atomically: true, encoding: .utf8)

@@ -350,6 +350,40 @@ enum CodeFont: String, CaseIterable {
     }
 }
 
+struct DocumentWorkspaceTab: Identifiable, Equatable {
+    let id: UUID
+    var title: String
+    var mode: AuthoringMode
+    var isDirty: Bool
+    var url: URL?
+
+    var displayTitle: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+
+    var systemImage: String {
+        switch mode {
+        case .prose: return "doc.text"
+        case .screenplay: return "film"
+        case .code: return "chevron.left.forwardslash.chevron.right"
+        }
+    }
+}
+
+private struct DocumentWorkspaceTabState {
+    var title: String
+    var attributedText: NSAttributedString
+    var currentURL: URL?
+    var currentType: UTType
+    var authoringMode: AuthoringMode
+    var codeLanguage: CodeLanguage
+    var screenplayElement: ScreenplayElement
+    var pageLayout: DocumentPageLayout
+    var hasUnsavedChanges: Bool
+    var editorLocation: EditorLocationSnapshot
+}
+
 @MainActor
 final class DocumentSession: ObservableObject {
     static let editableDocumentTypes: [UTType] = [
@@ -368,12 +402,26 @@ final class DocumentSession: ObservableObject {
             guard !isApplyingProgrammaticState else { return }
             if title != oldValue {
                 hasUnsavedChanges = true
+                refreshActiveTabMetadata()
             }
         }
     }
     @Published var attributedText: NSAttributedString = NSAttributedString(string: "")
-    @Published private(set) var currentURL: URL?
-    @Published private(set) var hasUnsavedChanges: Bool = false
+    @Published private(set) var currentURL: URL? {
+        didSet { refreshActiveTabMetadata() }
+    }
+    @Published private(set) var hasUnsavedChanges: Bool = false {
+        didSet { refreshActiveTabMetadata() }
+    }
+    @Published private(set) var workspaceTabs: [DocumentWorkspaceTab] = []
+    @Published private(set) var activeTabID: UUID?
+    @Published private(set) var canReopenClosedTab: Bool = false
+    @Published var autosaveOnTabSwitch: Bool = false {
+        didSet {
+            guard autosaveOnTabSwitch != oldValue else { return }
+            defaults.set(autosaveOnTabSwitch, forKey: autosaveOnTabSwitchKey)
+        }
+    }
     @Published private(set) var hasRestorableLastDocument: Bool = false
     @Published private(set) var wordCount: Int = 0
     @Published private(set) var charCount: Int = 0
@@ -400,6 +448,7 @@ final class DocumentSession: ObservableObject {
                 hasUnsavedChanges = true
             }
             updateMetrics()
+            refreshActiveTabMetadata()
         }
     }
     @Published var codeLanguage: CodeLanguage = .swift {
@@ -483,7 +532,11 @@ final class DocumentSession: ObservableObject {
     var canSaveDocument: Bool { true }
 
     var canCloseDocument: Bool {
-        currentURL != nil || hasUnsavedChanges || attributedText.length > 0 || title != "Untitled"
+        workspaceTabs.count > 1
+            || currentURL != nil
+            || hasUnsavedChanges
+            || attributedText.length > 0
+            || title != "Untitled"
     }
 
     var documentStatusLabel: String {
@@ -519,6 +572,9 @@ final class DocumentSession: ObservableObject {
 
     private var currentType: UTType = .mongrelDocument
     private var isApplyingProgrammaticState = false
+    private var isSwitchingTabs = false
+    private var workspaceTabStates: [UUID: DocumentWorkspaceTabState] = [:]
+    private var closedWorkspaceTabs: [(DocumentWorkspaceTab, DocumentWorkspaceTabState)] = []
     private let persistenceStore: WordProcessorPersistenceStore
     private let auditLogger = WordProcessorAuditLogger()
     private let defaults: UserDefaults
@@ -533,6 +589,7 @@ final class DocumentSession: ObservableObject {
     private let codeUseTabsKey = "wordprocessor.codeUseTabs"
     private let codeTabWidthKey = "wordprocessor.codeTabWidth"
     private let codeLineWrapKey = "wordprocessor.codeLineWrap"
+    private let autosaveOnTabSwitchKey = "wordprocessor.autosaveOnTabSwitch"
     private var languageToolRequestID: UUID?
 
     init(
@@ -551,6 +608,7 @@ final class DocumentSession: ObservableObject {
         let storedTabWidth = defaults.integer(forKey: codeTabWidthKey)
         self.codeTabWidth = [2, 4, 8].contains(storedTabWidth) ? storedTabWidth : 4
         self.codeLineWrap = defaults.bool(forKey: codeLineWrapKey)
+        self.autosaveOnTabSwitch = defaults.bool(forKey: autosaveOnTabSwitchKey)
         let storedZoom = defaults.double(forKey: editorZoomKey)
         self.editorZoom = storedZoom == 0 ? 1 : min(max(CGFloat(storedZoom), 0.6), 2)
         self.screenplayViewStyle = ScreenplayViewStyle(
@@ -569,77 +627,86 @@ final class DocumentSession: ObservableObject {
             ]
         )
         loadRecentDocuments()
+        bootstrapWorkspace()
     }
 
     func newDocument() {
-        guard confirmCanAbandonChanges() else { return }
-        applyProgrammaticState {
-            title = "Untitled"
-            attributedText = NSAttributedString(string: "")
-            currentURL = nil
-            authoringMode = .prose
-            currentType = .mongrelDocument
-            screenplayElement = .action
-            pageLayout = .empty
-            hasUnsavedChanges = false
-        }
-        invalidateLanguageToolResults()
-        updateMetrics()
+        openNewWorkspaceTab(mode: .prose)
         auditLogger.info("new_document")
     }
 
     func newScreenplay() {
-        guard confirmCanAbandonChanges() else { return }
-        applyProgrammaticState {
-            title = "Untitled Screenplay"
-            attributedText = NSAttributedString(string: "")
-            currentURL = nil
-            currentType = .mongrelScreenplay
-            authoringMode = .screenplay
-            screenplayElement = .sceneHeading
-            pageLayout = .empty
-            hasUnsavedChanges = false
-        }
-        invalidateLanguageToolResults()
-        updateMetrics()
+        openNewWorkspaceTab(mode: .screenplay)
         auditLogger.info("new_screenplay")
     }
 
     func newCodeDocument() {
-        guard confirmCanAbandonChanges() else { return }
-        applyProgrammaticState {
-            title = "Untitled Code"
-            attributedText = NSAttributedString(string: "")
-            currentURL = nil
-            currentType = codeLanguage.contentType
-            authoringMode = .code
-            pageLayout = .empty
-            hasUnsavedChanges = false
-            codeCursorLine = 1
-            codeCursorColumn = 1
-            codeSelectionLength = 0
-        }
-        invalidateLanguageToolResults()
-        updateMetrics()
+        openNewWorkspaceTab(mode: .code)
         auditLogger.info("new_code_document", metadata: ["language": codeLanguage.rawValue])
     }
 
     func closeDocument() {
-        guard canCloseDocument else { return }
-        guard confirmCanAbandonChanges() else { return }
-        applyProgrammaticState {
-            title = "Untitled"
-            attributedText = NSAttributedString(string: "")
-            currentURL = nil
-            authoringMode = .prose
-            currentType = .mongrelDocument
-            screenplayElement = .action
-            pageLayout = .empty
-            hasUnsavedChanges = false
+        guard let activeTabID else { return }
+        closeTab(activeTabID)
+    }
+
+    func switchToTab(_ id: UUID) {
+        activateWorkspaceTab(id, autosaveCurrent: true)
+    }
+
+    func selectAdjacentTab(offset: Int) {
+        guard workspaceTabs.count > 1,
+              let activeTabID,
+              let currentIndex = workspaceTabs.firstIndex(where: { $0.id == activeTabID }) else { return }
+        let count = workspaceTabs.count
+        let nextIndex = (currentIndex + offset % count + count) % count
+        switchToTab(workspaceTabs[nextIndex].id)
+    }
+
+    func closeTab(_ id: UUID) {
+        guard let index = workspaceTabs.firstIndex(where: { $0.id == id }) else { return }
+        if activeTabID != id {
+            activateWorkspaceTab(id, autosaveCurrent: true)
         }
-        invalidateLanguageToolResults()
-        updateMetrics()
+        guard activeTabID == id, confirmCanAbandonChanges() else { return }
+
+        syncActiveTabState()
+        if let tab = workspaceTabs.first(where: { $0.id == id }),
+           let state = workspaceTabStates[id] {
+            closedWorkspaceTabs.append((tab, state))
+            if closedWorkspaceTabs.count > 10 {
+                closedWorkspaceTabs.removeFirst(closedWorkspaceTabs.count - 10)
+            }
+            canReopenClosedTab = true
+        }
+
+        workspaceTabs.removeAll { $0.id == id }
+        workspaceTabStates[id] = nil
+        activeTabID = nil
+
+        if workspaceTabs.isEmpty {
+            installNewWorkspaceTab(state: makeBlankWorkspaceState(mode: .prose), reuseActiveTab: false)
+        } else {
+            let nextIndex = min(index, workspaceTabs.count - 1)
+            activateWorkspaceTab(workspaceTabs[nextIndex].id, autosaveCurrent: false)
+        }
         auditLogger.info("close_document")
+    }
+
+    func reopenClosedTab() {
+        guard let (tab, state) = closedWorkspaceTabs.popLast() else { return }
+        syncActiveTabState()
+        let id = workspaceTabs.contains(where: { $0.id == tab.id }) ? UUID() : tab.id
+        workspaceTabs.append(DocumentWorkspaceTab(
+            id: id,
+            title: tab.title,
+            mode: tab.mode,
+            isDirty: tab.isDirty,
+            url: tab.url
+        ))
+        workspaceTabStates[id] = state
+        canReopenClosedTab = !closedWorkspaceTabs.isEmpty
+        activateWorkspaceTab(id, autosaveCurrent: true)
     }
 
     func markDirty() {
@@ -757,6 +824,12 @@ final class DocumentSession: ObservableObject {
     /// Finder-open events and keeps the actual file lifecycle testable.
     @discardableResult
     func openDocument(at url: URL) -> Bool {
+        let standardizedURL = url.standardizedFileURL
+        if let existingTab = workspaceTabs.first(where: { $0.url?.standardizedFileURL == standardizedURL }) {
+            switchToTab(existingTab.id)
+            return true
+        }
+
         let didAccessSecurityScope = url.startAccessingSecurityScopedResource()
         defer {
             if didAccessSecurityScope {
@@ -766,21 +839,19 @@ final class DocumentSession: ObservableObject {
 
         do {
             let loaded = try loadAttributedString(from: url)
-            applyProgrammaticState {
-                attributedText = loaded.text
-                title = url.deletingPathExtension().lastPathComponent
-                currentURL = url
-                currentType = loaded.type
-                authoringMode = loaded.mode
-                if let loadedLanguage = loaded.codeLanguage {
-                    codeLanguage = loadedLanguage
-                }
-                pageLayout = loaded.pageLayout
-                hasUnsavedChanges = false
-            }
-            invalidateLanguageToolResults()
-            formattingBridge.documentTextColor = pageLayout.pageColors.text.nsColor
-            updateMetrics()
+            let state = DocumentWorkspaceTabState(
+                title: url.deletingPathExtension().lastPathComponent,
+                attributedText: loaded.text,
+                currentURL: url,
+                currentType: loaded.type,
+                authoringMode: loaded.mode,
+                codeLanguage: loaded.codeLanguage ?? codeLanguage,
+                screenplayElement: loaded.mode == .screenplay ? .action : screenplayElement,
+                pageLayout: loaded.pageLayout,
+                hasUnsavedChanges: false,
+                editorLocation: EditorLocationSnapshot()
+            )
+            installNewWorkspaceTab(state: state, reuseActiveTab: isCurrentTabPristine)
             trackRecent(url)
 
             if let bookmarkData = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
@@ -1302,6 +1373,7 @@ final class DocumentSession: ObservableObject {
                 }
                 hasRestorableLastDocument = persistenceStore.hasLastDocumentBookmark
                 trackRecent(url)
+                syncActiveTabState()
             }
 
             auditLogger.info("save_document_success", metadata: ["type": type.identifier, "file": url.lastPathComponent, "trackCurrent": shouldTrackAsCurrent])
@@ -1324,6 +1396,174 @@ final class DocumentSession: ObservableObject {
             title: title,
             pageLayout: pageLayout
         )
+    }
+
+    private func bootstrapWorkspace() {
+        guard workspaceTabs.isEmpty else { return }
+        installNewWorkspaceTab(state: captureCurrentWorkspaceState(), reuseActiveTab: false)
+    }
+
+    private func openNewWorkspaceTab(mode: AuthoringMode) {
+        installNewWorkspaceTab(
+            state: makeBlankWorkspaceState(mode: mode),
+            reuseActiveTab: isCurrentTabPristine
+        )
+    }
+
+    private var isCurrentTabPristine: Bool {
+        currentURL == nil && !hasUnsavedChanges && attributedText.length == 0
+    }
+
+    private func makeBlankWorkspaceState(mode: AuthoringMode) -> DocumentWorkspaceTabState {
+        let title: String
+        let type: UTType
+        let element: ScreenplayElement
+        switch mode {
+        case .prose:
+            title = "Untitled"
+            type = .mongrelDocument
+            element = .action
+        case .screenplay:
+            title = "Untitled Screenplay"
+            type = .mongrelScreenplay
+            element = .sceneHeading
+        case .code:
+            title = "Untitled Code"
+            type = codeLanguage.contentType
+            element = .action
+        }
+        return DocumentWorkspaceTabState(
+            title: title,
+            attributedText: NSAttributedString(string: ""),
+            currentURL: nil,
+            currentType: type,
+            authoringMode: mode,
+            codeLanguage: codeLanguage,
+            screenplayElement: element,
+            pageLayout: .empty,
+            hasUnsavedChanges: false,
+            editorLocation: EditorLocationSnapshot()
+        )
+    }
+
+    private func installNewWorkspaceTab(
+        state: DocumentWorkspaceTabState,
+        reuseActiveTab: Bool
+    ) {
+        if reuseActiveTab, let activeTabID {
+            workspaceTabStates[activeTabID] = state
+            loadWorkspaceState(state)
+            refreshActiveTabMetadata()
+            return
+        }
+
+        autosaveCurrentTabIfNeeded()
+        syncActiveTabState()
+        let id = UUID()
+        workspaceTabStates[id] = state
+        workspaceTabs.append(workspaceTab(from: state, id: id))
+        activeTabID = id
+        loadWorkspaceState(state)
+        refreshActiveTabMetadata()
+    }
+
+    private func activateWorkspaceTab(_ id: UUID, autosaveCurrent: Bool) {
+        guard id != activeTabID,
+              workspaceTabs.contains(where: { $0.id == id }),
+              let state = workspaceTabStates[id] else { return }
+
+        if autosaveCurrent {
+            autosaveCurrentTabIfNeeded()
+        }
+        syncActiveTabState()
+        activeTabID = id
+        loadWorkspaceState(state)
+        refreshActiveTabMetadata()
+        auditLogger.info("switch_workspace_tab", metadata: ["mode": state.authoringMode.rawValue])
+    }
+
+    private func autosaveCurrentTabIfNeeded() {
+        guard autosaveOnTabSwitch,
+              hasUnsavedChanges,
+              let currentURL else { return }
+        let wouldDropNativeLayout = pageLayout.hasNativeOnlyFeatures
+            && currentType != .mongrelDocument
+            && currentType != .mongrelScreenplay
+        guard !wouldDropNativeLayout else { return }
+        _ = writeDocument(to: currentURL, type: currentType)
+    }
+
+    private func captureCurrentWorkspaceState() -> DocumentWorkspaceTabState {
+        DocumentWorkspaceTabState(
+            title: title,
+            attributedText: attributedText.copy() as? NSAttributedString ?? attributedText,
+            currentURL: currentURL,
+            currentType: currentType,
+            authoringMode: authoringMode,
+            codeLanguage: codeLanguage,
+            screenplayElement: screenplayElement,
+            pageLayout: pageLayout,
+            hasUnsavedChanges: hasUnsavedChanges,
+            editorLocation: formattingBridge.captureEditorLocation()
+        )
+    }
+
+    private func syncActiveTabState() {
+        guard let activeTabID else { return }
+        let state = captureCurrentWorkspaceState()
+        workspaceTabStates[activeTabID] = state
+        if let index = workspaceTabs.firstIndex(where: { $0.id == activeTabID }) {
+            workspaceTabs[index] = workspaceTab(from: state, id: activeTabID)
+        }
+    }
+
+    private func loadWorkspaceState(_ state: DocumentWorkspaceTabState) {
+        isSwitchingTabs = true
+        applyProgrammaticState {
+            title = state.title
+            attributedText = state.attributedText.copy() as? NSAttributedString ?? state.attributedText
+            currentURL = state.currentURL
+            currentType = state.currentType
+            authoringMode = state.authoringMode
+            codeLanguage = state.codeLanguage
+            screenplayElement = state.screenplayElement
+            pageLayout = state.pageLayout
+            hasUnsavedChanges = state.hasUnsavedChanges
+            codeCursorLine = 1
+            codeCursorColumn = 1
+            codeSelectionLength = 0
+        }
+        isSwitchingTabs = false
+        invalidateLanguageToolResults()
+        formattingBridge.documentTextColor = pageLayout.pageColors.text.nsColor
+        updateMetrics()
+        formattingBridge.restoreEditorLocation(state.editorLocation)
+    }
+
+    private func workspaceTab(from state: DocumentWorkspaceTabState, id: UUID) -> DocumentWorkspaceTab {
+        DocumentWorkspaceTab(
+            id: id,
+            title: state.title,
+            mode: state.authoringMode,
+            isDirty: state.hasUnsavedChanges,
+            url: state.currentURL
+        )
+    }
+
+    private func refreshActiveTabMetadata() {
+        guard !isSwitchingTabs,
+              let activeTabID,
+              let index = workspaceTabs.firstIndex(where: { $0.id == activeTabID }) else { return }
+        let updated = DocumentWorkspaceTab(
+            id: activeTabID,
+            title: title,
+            mode: authoringMode,
+            isDirty: hasUnsavedChanges,
+            url: currentURL
+        )
+        if workspaceTabs[index] != updated {
+            workspaceTabs[index] = updated
+        }
     }
 
     private func confirmCanAbandonChanges() -> Bool {

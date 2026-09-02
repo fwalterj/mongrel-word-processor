@@ -210,6 +210,8 @@ struct WordProcessorContentView: View {
     private var detailPane: some View {
         VStack(spacing: 0) {
             if !isFocusMode {
+                workspaceTabBar
+                    .fixedSize(horizontal: false, vertical: true)
                 topChrome
                     .fixedSize(horizontal: false, vertical: true)
                 formattingToolbar
@@ -227,6 +229,131 @@ struct WordProcessorContentView: View {
                 focusModeControls
                     .padding(14)
             }
+        }
+    }
+
+    private var workspaceTabBar: some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(session.workspaceTabs) { tab in
+                        workspaceTab(tab)
+                    }
+                }
+                .padding(.vertical, 5)
+                .padding(.leading, 8)
+            }
+
+            Menu {
+                Button("New Document") { session.newDocument() }
+                Button("New Screenplay") { session.newScreenplay() }
+                Button("New Code File") { session.newCodeDocument() }
+                Divider()
+                Button("Reopen Closed Tab") { session.reopenClosedTab() }
+                    .disabled(!session.canReopenClosedTab)
+                Toggle("Autosave Named Tabs on Switch", isOn: $session.autosaveOnTabSwitch)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(DesignTokens.accent)
+                    .frame(width: 28, height: 26)
+                    .background(DesignTokens.glassElevated.opacity(0.66), in: RoundedRectangle(cornerRadius: 7))
+            }
+            .menuStyle(.borderlessButton)
+            .help("Open a new project tab")
+            .accessibilityLabel("New project tab")
+
+            Button {
+                session.autosaveOnTabSwitch.toggle()
+            } label: {
+                Label(
+                    session.autosaveOnTabSwitch ? "Autosave" : "Manual",
+                    systemImage: session.autosaveOnTabSwitch
+                        ? "arrow.triangle.2.circlepath.circle.fill"
+                        : "arrow.triangle.2.circlepath.circle"
+                )
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(session.autosaveOnTabSwitch ? DesignTokens.accent : DesignTokens.chromeText.opacity(0.58))
+                .padding(.horizontal, 7)
+                .frame(height: 26)
+            }
+            .buttonStyle(.plain)
+            .help(session.autosaveOnTabSwitch ? "Autosave on tab switch is on" : "Autosave on tab switch is off")
+            .accessibilityLabel(session.autosaveOnTabSwitch ? "Autosave on tab switch, on" : "Autosave on tab switch, off")
+            .padding(.trailing, 8)
+        }
+        .background(DesignTokens.glassDeep.opacity(0.96))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(DesignTokens.borderRim.opacity(0.34))
+                .frame(height: 0.5)
+        }
+    }
+
+    private func workspaceTab(_ tab: DocumentWorkspaceTab) -> some View {
+        let isActive = session.activeTabID == tab.id
+        return HStack(spacing: 0) {
+            Button {
+                session.switchToTab(tab.id)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: tab.systemImage)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isActive ? workspaceTabAccent(tab.mode) : DesignTokens.chromeText.opacity(0.52))
+
+                    Text(tab.displayTitle)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .font(.system(size: 11, weight: isActive ? .semibold : .medium, design: .rounded))
+                        .foregroundStyle(DesignTokens.chromeText.opacity(isActive ? 0.94 : 0.66))
+
+                    if tab.isDirty {
+                        Circle()
+                            .fill(workspaceTabAccent(tab.mode))
+                            .frame(width: 5, height: 5)
+                            .accessibilityLabel("Unsaved changes")
+                    }
+                }
+                .padding(.leading, 10)
+                .padding(.trailing, 7)
+                .frame(maxWidth: 190)
+                .frame(height: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                session.closeTab(tab.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.52))
+                    .frame(width: 22, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close tab")
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isActive ? DesignTokens.glassElevated.opacity(0.92) : DesignTokens.glassCard.opacity(0.42))
+        )
+        .overlay(alignment: .bottom) {
+            if isActive {
+                Capsule()
+                    .fill(workspaceTabAccent(tab.mode))
+                    .frame(height: 2)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .help(tab.url?.path ?? "Unsaved \(tab.mode.title.lowercased()) project")
+    }
+
+    private func workspaceTabAccent(_ mode: AuthoringMode) -> Color {
+        switch mode {
+        case .prose: return Color(red: 0.39, green: 0.68, blue: 0.94)
+        case .screenplay: return Color(red: 0.94, green: 0.65, blue: 0.31)
+        case .code: return Color(red: 0.39, green: 0.80, blue: 0.63)
         }
     }
 
@@ -1243,6 +1370,17 @@ struct WordProcessorContentView: View {
             )
 
             shortcutSection(
+                "Workspace",
+                items: [
+                    ("Cmd + Shift + ]", "Next project tab"),
+                    ("Cmd + Shift + [", "Previous project tab"),
+                    ("Cmd + W", "Close current tab"),
+                    ("Cmd + Shift + T", "Reopen closed tab"),
+                    ("Tab Bar Sync", "Autosave named files on switch")
+                ]
+            )
+
+            shortcutSection(
                 "Writing",
                 items: [
                     ("Cmd + Shift + F", "Enter focus mode"),
@@ -1270,7 +1408,7 @@ struct WordProcessorContentView: View {
                     ("Cmd + /", "Toggle line comment"),
                     ("Cmd + Shift + D", "Duplicate selected lines"),
                     ("Language Menu", "Choose language or format"),
-                    ("Theme Menu", "Cobalt/Frost/Amber themes"),
+                    ("Theme Menu", "Studio, paper, contrast, or terminal themes"),
                     ("Esc", "Dismiss completion popup")
                 ]
             )

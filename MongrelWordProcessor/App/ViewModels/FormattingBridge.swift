@@ -23,6 +23,11 @@ struct ScreenplaySuggestion: Identifiable, Hashable {
     }
 }
 
+struct EditorLocationSnapshot {
+    var selection: NSRange = NSRange(location: 0, length: 0)
+    var visibleOrigin: NSPoint = .zero
+}
+
 /// Bridges formatting toolbar actions to the first-responder NSTextView.
 ///
 /// Bold / italic / underline / alignment are sent through the NSResponder chain
@@ -43,6 +48,37 @@ final class FormattingBridge: ObservableObject {
     @Published private(set) var isStrikethrough: Bool = false
     @Published private(set) var activeScreenplayElement: ScreenplayElement = .action
     @Published private(set) var screenplaySuggestions: [ScreenplaySuggestion] = []
+
+    func captureEditorLocation() -> EditorLocationSnapshot {
+        guard let textView else { return EditorLocationSnapshot() }
+        return EditorLocationSnapshot(
+            selection: textView.selectedRange(),
+            visibleOrigin: textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
+        )
+    }
+
+    func restoreEditorLocation(_ snapshot: EditorLocationSnapshot) {
+        DispatchQueue.main.async { [weak self] in
+            guard let textView = self?.textView else { return }
+            let length = (textView.string as NSString).length
+            let location = min(max(0, snapshot.selection.location), length)
+            let selection = NSRange(
+                location: location,
+                length: min(max(0, snapshot.selection.length), length - location)
+            )
+            textView.setSelectedRange(selection)
+            if let contentView = textView.enclosingScrollView?.contentView {
+                let maximumX = max(0, textView.bounds.width - contentView.bounds.width)
+                let maximumY = max(0, textView.bounds.height - contentView.bounds.height)
+                contentView.scroll(to: NSPoint(
+                    x: min(max(0, snapshot.visibleOrigin.x), maximumX),
+                    y: min(max(0, snapshot.visibleOrigin.y), maximumY)
+                ))
+                textView.enclosingScrollView?.reflectScrolledClipView(contentView)
+            }
+            textView.window?.makeFirstResponder(textView)
+        }
+    }
 
     func showFontPanel() {
         guard let textView else { return }

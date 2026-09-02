@@ -126,6 +126,30 @@ private struct WordProcessorCommands: Commands {
             .keyboardShortcut("p", modifiers: .command)
         }
 
+        CommandMenu("Workspace") {
+            Button("Next Tab") {
+                session.selectAdjacentTab(offset: 1)
+            }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled(session.workspaceTabs.count < 2)
+
+            Button("Previous Tab") {
+                session.selectAdjacentTab(offset: -1)
+            }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled(session.workspaceTabs.count < 2)
+
+            Button("Reopen Closed Tab") {
+                session.reopenClosedTab()
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(!session.canReopenClosedTab)
+
+            Divider()
+
+            Toggle("Autosave Named Tabs on Switch", isOn: $session.autosaveOnTabSwitch)
+        }
+
         CommandMenu("Writing") {
             Button("Auto Format Screenplay") {
                 session.formattingBridge.autoFormatEntireScreenplay()
