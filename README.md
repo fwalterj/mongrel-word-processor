@@ -7,12 +7,14 @@ A native macOS writing environment that treats prose and screenplays as first-cl
 ## What works
 
 - Native prose, code, and screenplay authoring modes.
+- Mixed-mode workspace tabs for keeping prose, screenplay, and code projects live together.
+- Autosave-on-tab-switch for named files, plus versioned local workspace recovery for untitled and dirty tabs.
 - True US Letter screenplay pages with live page and scene counts.
 - Scene heading, action, character, parenthetical, dialogue, transition, shot, insert/title card, and time-jump elements.
 - Contextual screenplay suggestions, Tab/Shift-Tab element cycling, and whole-document auto-formatting.
 - A scene navigator that jumps directly to detected headings.
-- A Save As Type menu for RTF, DOCX, plain text, and native `.mgscreenplay` documents.
-- RTF as the default prose format, DOCX import/export for Word interoperability, and plain text for durable unformatted work.
+- A Save As Type menu for native Mongrel files, RTF/RTFD, DOCX, source code, and plain text.
+- Native `.mongreldoc` prose masters that retain page colors, headers, footers, attachments, and mode metadata.
 - Native `.mgscreenplay` files that retain semantic screenplay elements other formats cannot preserve.
 - PDF, DOCX, RTF, and plain-text export.
 - Focus and typewriter modes, zoom controls, recent documents, and a command palette.
@@ -71,13 +73,14 @@ No single format wins every game:
 
 | Format | Best use | Tradeoff |
 |---|---|---|
+| `.mongreldoc` | Prose or code master with Mongrel layout | Mongrel-specific outside the app |
 | `.mgscreenplay` | Screenplay master | Mongrel-specific outside the app |
-| `.rtf` | Default editable prose | Less universal than DOCX in office workflows |
+| `.rtf` | Portable editable prose | Less universal than DOCX in office workflows |
 | `.docx` | Sharing with Word and other suites | Conversion can alter advanced layout or app-specific semantics |
 | `.txt` | Code, notes, archival portability | No typography, styles, or screenplay metadata |
 | `.pdf` | Fixed-layout delivery and review | Not an authoring format |
 
-Keep screenplay masters as `.mgscreenplay`; use DOCX, RTF, TXT, or PDF as interchange and delivery copies.
+Keep prose masters with native layout as `.mongreldoc` and screenplay masters as `.mgscreenplay`; use DOCX, RTF, TXT, or PDF as interchange and delivery copies.
 
 ## Fonts and local grammar
 
@@ -87,6 +90,6 @@ The Writing Tools panel can query a LanguageTool server at `http://127.0.0.1:808
 
 ## Status
 
-This is development software, not a finished release. File creation, saving, RTF and DOCX round trips, screenplay semantics, pagination, export, accessibility palettes, and editor integration have automated coverage. Destructive editing and unusual import files still deserve real-world testing before a public beta binary.
+This is development software, not a finished release. File creation, mixed-mode tabs, workspace recovery, saving, RTF and DOCX round trips, screenplay semantics, pagination, export, accessibility palettes, and editor integration have automated coverage. Destructive editing and unusual import files still deserve real-world testing before a public beta binary.
 
 The source is currently viewable, but no open-source license has been granted yet.

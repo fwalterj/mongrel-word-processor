@@ -476,6 +476,185 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceRecoveryRestoresMixedDirtyProjectsAndActiveTab() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("MixedRecovery", isDirectory: true)
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Prose in progress")
+        session?.markDirty()
+        let proseID = try XCTUnwrap(session?.activeTabID)
+
+        session?.newScreenplay()
+        session?.attributedText = NSAttributedString(string: "INT. ARCHIVE - NIGHT\n")
+        session?.pageLayout.header.isEnabled = true
+        session?.pageLayout.header.text = "Recovery draft"
+        session?.markDirty()
+        let screenplayID = try XCTUnwrap(session?.activeTabID)
+
+        session?.newCodeDocument()
+        session?.codeLanguage = .sql
+        session?.attributedText = NSAttributedString(string: "SELECT * FROM drafts;\n")
+        session?.markDirty()
+        let codeID = try XCTUnwrap(session?.activeTabID)
+        session?.flushWorkspaceRecovery()
+        session = nil
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.workspaceTabs.count, 3)
+        XCTAssertEqual(restored.activeTabID, codeID)
+        XCTAssertEqual(restored.authoringMode, .code)
+        XCTAssertEqual(restored.codeLanguage, .sql)
+        XCTAssertEqual(restored.attributedText.string, "SELECT * FROM drafts;\n")
+        XCTAssertTrue(restored.hasUnsavedChanges)
+
+        restored.switchToTab(screenplayID)
+        XCTAssertEqual(restored.authoringMode, .screenplay)
+        XCTAssertEqual(restored.pageLayout.header.text, "Recovery draft")
+        XCTAssertEqual(restored.attributedText.string, "INT. ARCHIVE - NIGHT\n")
+
+        restored.switchToTab(proseID)
+        XCTAssertEqual(restored.authoringMode, .prose)
+        XCTAssertEqual(restored.attributedText.string, "Prose in progress")
+    }
+
+    @MainActor
+    func testWorkspaceRecoveryReloadsCleanNamedFileFromDisk() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("NamedRecovery", isDirectory: true)
+        let destination = temporaryDirectory.appendingPathComponent("LivingDocument.txt")
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Version one")
+        XCTAssertTrue(try XCTUnwrap(session).saveDocument(to: destination, type: .plainText))
+        session?.flushWorkspaceRecovery()
+        session = nil
+
+        try "Version two from disk".write(to: destination, atomically: true, encoding: .utf8)
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.attributedText.string, "Version two from disk")
+        XCTAssertEqual(
+            restored.currentURL?.standardizedFileURL.resolvingSymlinksInPath(),
+            destination.standardizedFileURL.resolvingSymlinksInPath()
+        )
+        XCTAssertFalse(restored.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testWorkspaceRecoveryPreservesDirtyNamedDraftOverChangedDiskFile() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("DirtyNamedRecovery", isDirectory: true)
+        let destination = temporaryDirectory.appendingPathComponent("ConflictedDraft.txt")
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Saved version")
+        XCTAssertTrue(try XCTUnwrap(session).saveDocument(to: destination, type: .plainText))
+        session?.attributedText = NSAttributedString(string: "Unsaved recovered version")
+        session?.markDirty()
+        session?.flushWorkspaceRecovery()
+        session = nil
+
+        try "External disk version".write(to: destination, atomically: true, encoding: .utf8)
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.attributedText.string, "Unsaved recovered version")
+        XCTAssertTrue(restored.hasUnsavedChanges)
+        XCTAssertEqual(restored.title, "ConflictedDraft (Recovered Conflict)")
+        XCTAssertNil(restored.currentURL)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "External disk version")
+    }
+
+    @MainActor
+    func testWorkspaceRecoveryKeepsDirtyNamedDraftAttachedWhenDiskIsUnchanged() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("DirtyUnchangedRecovery", isDirectory: true)
+        let destination = temporaryDirectory.appendingPathComponent("OngoingDraft.txt")
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Saved version")
+        XCTAssertTrue(try XCTUnwrap(session).saveDocument(to: destination, type: .plainText))
+        session?.attributedText = NSAttributedString(string: "Unsaved continuation")
+        session?.markDirty()
+        session?.flushWorkspaceRecovery()
+        session = nil
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.attributedText.string, "Unsaved continuation")
+        XCTAssertTrue(restored.hasUnsavedChanges)
+        XCTAssertEqual(restored.title, "OngoingDraft")
+        XCTAssertEqual(
+            restored.currentURL?.standardizedFileURL.resolvingSymlinksInPath(),
+            destination.standardizedFileURL.resolvingSymlinksInPath()
+        )
+    }
+
+    @MainActor
+    func testWorkspaceRecoveryPreservesDeletedNamedFileAsUnsavedCopy() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("MissingFileRecovery", isDirectory: true)
+        let destination = temporaryDirectory.appendingPathComponent("DeletedDraft.txt")
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Do not lose this")
+        XCTAssertTrue(try XCTUnwrap(session).saveDocument(to: destination, type: .plainText))
+        session?.flushWorkspaceRecovery()
+        session = nil
+        try FileManager.default.removeItem(at: destination)
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.attributedText.string, "Do not lose this")
+        XCTAssertEqual(restored.title, "DeletedDraft (Recovered)")
+        XCTAssertNil(restored.currentURL)
+        XCTAssertTrue(restored.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testCorruptWorkspaceRecoveryIsQuarantinedAndStartsClean() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("CorruptRecovery", isDirectory: true)
+        try FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(
+            to: recoveryDirectory.appendingPathComponent("WorkspaceRecovery.json")
+        )
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.workspaceTabs.count, 1)
+        XCTAssertEqual(restored.title, "Untitled")
+        XCTAssertFalse(restored.hasUnsavedChanges)
+        let recoveryFiles = try FileManager.default.contentsOfDirectory(
+            at: recoveryDirectory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertFalse(recoveryFiles.contains(where: { $0.lastPathComponent == "WorkspaceRecovery.json" }))
+        XCTAssertTrue(recoveryFiles.contains(where: { $0.lastPathComponent.hasPrefix("WorkspaceRecovery-corrupt-") }))
+    }
+
+    @MainActor
+    func testPristineWorkspaceDoesNotCreateRecoveryManifest() {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("EmptyRecovery", isDirectory: true)
+        let session = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        session.flushWorkspaceRecovery()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: recoveryDirectory.appendingPathComponent("WorkspaceRecovery.json").path
+        ))
+    }
+
+    @MainActor
+    func testRecoveryReschedulesPageLayoutChangesAfterDocumentIsAlreadyDirty() {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("RescheduledRecovery", isDirectory: true)
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Dirty body")
+        session?.markDirty()
+        session?.pageLayout.header.isEnabled = true
+        session?.pageLayout.header.text = "First header"
+        RunLoop.main.run(until: Date().addingTimeInterval(0.55))
+
+        session?.pageLayout.header.text = "Updated header"
+        RunLoop.main.run(until: Date().addingTimeInterval(0.55))
+        session = nil
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        XCTAssertEqual(restored.pageLayout.header.text, "Updated header")
+        XCTAssertTrue(restored.hasUnsavedChanges)
+    }
+
+    @MainActor
     func testCleanClosedTabCanBeReopened() throws {
         let session = makeSession()
         session.newScreenplay()
@@ -1126,11 +1305,15 @@ final class DocumentSessionTests: XCTestCase {
 
     @MainActor
     private func makeSession(
+        workspaceRecoveryDirectory: URL? = nil,
         errorPresenter: ((String, String) -> Void)? = nil
     ) -> DocumentSession {
-        DocumentSession(
+        let isolatedRecoveryDirectory = workspaceRecoveryDirectory
+            ?? temporaryDirectory.appendingPathComponent("Recovery-\(UUID().uuidString)", isDirectory: true)
+        return DocumentSession(
             defaults: defaults,
             companionLexicon: MongrelDictionaryCompanionLexicon(headwords: []),
+            workspaceRecoveryDirectory: isolatedRecoveryDirectory,
             errorPresenter: errorPresenter
         )
     }

@@ -371,7 +371,7 @@ struct DocumentWorkspaceTab: Identifiable, Equatable {
     }
 }
 
-private struct DocumentWorkspaceTabState {
+struct DocumentWorkspaceTabState {
     var title: String
     var attributedText: NSAttributedString
     var currentURL: URL?
@@ -403,6 +403,7 @@ final class DocumentSession: ObservableObject {
             if title != oldValue {
                 hasUnsavedChanges = true
                 refreshActiveTabMetadata()
+                scheduleWorkspaceRecovery()
             }
         }
     }
@@ -411,7 +412,12 @@ final class DocumentSession: ObservableObject {
         didSet { refreshActiveTabMetadata() }
     }
     @Published private(set) var hasUnsavedChanges: Bool = false {
-        didSet { refreshActiveTabMetadata() }
+        didSet {
+            refreshActiveTabMetadata()
+            if hasUnsavedChanges != oldValue, !isApplyingProgrammaticState {
+                scheduleWorkspaceRecovery()
+            }
+        }
     }
     @Published private(set) var workspaceTabs: [DocumentWorkspaceTab] = []
     @Published private(set) var activeTabID: UUID?
@@ -436,6 +442,7 @@ final class DocumentSession: ObservableObject {
         didSet {
             guard pageLayout != oldValue, !isApplyingProgrammaticState else { return }
             hasUnsavedChanges = true
+            scheduleWorkspaceRecovery()
         }
     }
     @Published var authoringMode: AuthoringMode = .prose {
@@ -446,6 +453,7 @@ final class DocumentSession: ObservableObject {
             }
             if !isApplyingProgrammaticState {
                 hasUnsavedChanges = true
+                scheduleWorkspaceRecovery()
             }
             updateMetrics()
             refreshActiveTabMetadata()
@@ -457,6 +465,9 @@ final class DocumentSession: ObservableObject {
             defaults.set(codeLanguage.rawValue, forKey: codeLanguageKey)
             if currentURL == nil, authoringMode == .code {
                 currentType = codeLanguage.contentType
+            }
+            if !isApplyingProgrammaticState {
+                scheduleWorkspaceRecovery()
             }
         }
     }
@@ -509,7 +520,12 @@ final class DocumentSession: ObservableObject {
     @Published private(set) var codeCursorLine: Int = 1
     @Published private(set) var codeCursorColumn: Int = 1
     @Published private(set) var codeSelectionLength: Int = 0
-    @Published var screenplayElement: ScreenplayElement = .action
+    @Published var screenplayElement: ScreenplayElement = .action {
+        didSet {
+            guard screenplayElement != oldValue, !isApplyingProgrammaticState else { return }
+            scheduleWorkspaceRecovery()
+        }
+    }
     @Published private(set) var editorZoom: CGFloat = 1
     @Published var screenplayViewStyle: ScreenplayViewStyle = .fitWidth {
         didSet {
@@ -576,9 +592,11 @@ final class DocumentSession: ObservableObject {
     private var workspaceTabStates: [UUID: DocumentWorkspaceTabState] = [:]
     private var closedWorkspaceTabs: [(DocumentWorkspaceTab, DocumentWorkspaceTabState)] = []
     private let persistenceStore: WordProcessorPersistenceStore
+    private let workspaceRecoveryStore: WordProcessorWorkspaceRecoveryStore
     private let auditLogger = WordProcessorAuditLogger()
     private let defaults: UserDefaults
     private let errorPresenter: (String, String) -> Void
+    private var workspaceRecoveryWorkItem: DispatchWorkItem?
     private let recentDocsKey = "wordprocessor.recentDocs"
     private let editorZoomKey = "wordprocessor.editorZoom"
     private let screenplayViewStyleKey = "wordprocessor.screenplayViewStyle"
@@ -596,10 +614,12 @@ final class DocumentSession: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         companionLexicon: MongrelDictionaryCompanionLexicon = MongrelDictionaryCompanionLexicon(),
+        workspaceRecoveryDirectory: URL? = nil,
         errorPresenter: ((String, String) -> Void)? = nil
     ) {
         self.defaults = defaults
         self.persistenceStore = WordProcessorPersistenceStore(defaults: defaults)
+        self.workspaceRecoveryStore = WordProcessorWorkspaceRecoveryStore(directory: workspaceRecoveryDirectory)
         self.companionLexicon = companionLexicon
         self.errorPresenter = errorPresenter ?? { message, details in
             let alert = NSAlert()
@@ -636,7 +656,9 @@ final class DocumentSession: ObservableObject {
             ]
         )
         loadRecentDocuments()
-        bootstrapWorkspace()
+        if !restoreWorkspaceIfAvailable() {
+            bootstrapWorkspace()
+        }
     }
 
     func newDocument() {
@@ -722,6 +744,13 @@ final class DocumentSession: ObservableObject {
         hasUnsavedChanges = true
         invalidateLanguageToolResults()
         updateMetrics()
+        scheduleWorkspaceRecovery()
+    }
+
+    func flushWorkspaceRecovery() {
+        workspaceRecoveryWorkItem?.cancel()
+        workspaceRecoveryWorkItem = nil
+        persistWorkspaceRecovery()
     }
 
     func updateRenderedScreenplayPageCount(_ count: Int) {
@@ -1393,6 +1422,7 @@ final class DocumentSession: ObservableObject {
                 hasRestorableLastDocument = persistenceStore.hasLastDocumentBookmark
                 trackRecent(url)
                 syncActiveTabState()
+                scheduleWorkspaceRecovery()
             }
 
             auditLogger.info("save_document_success", metadata: ["type": type.identifier, "file": url.lastPathComponent, "trackCurrent": shouldTrackAsCurrent])
@@ -1473,6 +1503,7 @@ final class DocumentSession: ObservableObject {
             workspaceTabStates[activeTabID] = state
             loadWorkspaceState(state)
             refreshActiveTabMetadata()
+            scheduleWorkspaceRecovery()
             return
         }
 
@@ -1484,6 +1515,7 @@ final class DocumentSession: ObservableObject {
         activeTabID = id
         loadWorkspaceState(state)
         refreshActiveTabMetadata()
+        scheduleWorkspaceRecovery()
     }
 
     private func activateWorkspaceTab(_ id: UUID, autosaveCurrent: Bool) {
@@ -1499,6 +1531,7 @@ final class DocumentSession: ObservableObject {
         loadWorkspaceState(state)
         refreshActiveTabMetadata()
         auditLogger.info("switch_workspace_tab", metadata: ["mode": state.authoringMode.rawValue])
+        scheduleWorkspaceRecovery()
     }
 
     private func archiveAndRemoveTab(_ id: UUID, fallbackIndex: Int) {
@@ -1530,6 +1563,7 @@ final class DocumentSession: ObservableObject {
             }
         }
         auditLogger.info("close_document")
+        scheduleWorkspaceRecovery()
     }
 
     private func isPristineWorkspaceState(_ state: DocumentWorkspaceTabState) -> Bool {
@@ -1546,6 +1580,152 @@ final class DocumentSession: ObservableObject {
 
     private func canonicalDocumentURL(_ url: URL) -> URL {
         url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    private func scheduleWorkspaceRecovery() {
+        guard !isSwitchingTabs else { return }
+        workspaceRecoveryWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.workspaceRecoveryWorkItem = nil
+            self?.persistWorkspaceRecovery()
+        }
+        workspaceRecoveryWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
+    }
+
+    private func persistWorkspaceRecovery() {
+        syncActiveTabState()
+
+        if workspaceTabs.count == 1,
+           let onlyTab = workspaceTabs.first,
+           let onlyState = workspaceTabStates[onlyTab.id],
+           isPristineWorkspaceState(onlyState) {
+            do {
+                try workspaceRecoveryStore.clear()
+            } catch {
+                auditLogger.error("workspace_recovery_clear_failed", error: error)
+            }
+            return
+        }
+
+        do {
+            let recoveredTabs = try workspaceTabs.map { tab -> WorkspaceRecoveryTab in
+                guard let state = workspaceTabStates[tab.id] else {
+                    throw WorkspaceRecoveryError.missingTabState
+                }
+                return try WorkspaceRecoveryTab(tab: tab, state: state)
+            }
+            let manifest = WorkspaceRecoveryManifest(
+                activeTabID: activeTabID,
+                tabs: recoveredTabs
+            )
+            try workspaceRecoveryStore.save(JSONEncoder().encode(manifest))
+            auditLogger.info("workspace_recovery_saved", metadata: ["tabs": recoveredTabs.count])
+        } catch {
+            auditLogger.error("workspace_recovery_save_failed", error: error)
+        }
+    }
+
+    private func restoreWorkspaceIfAvailable() -> Bool {
+        do {
+            guard let data = try workspaceRecoveryStore.load() else { return false }
+            let manifest = try JSONDecoder().decode(WorkspaceRecoveryManifest.self, from: data)
+            guard manifest.formatVersion == WorkspaceRecoveryManifest.currentVersion,
+                  !manifest.tabs.isEmpty,
+                  manifest.tabs.count <= WorkspaceRecoveryManifest.maximumTabCount else {
+                throw WorkspaceRecoveryError.unsupportedManifest
+            }
+
+            var restoredTabs: [DocumentWorkspaceTab] = []
+            var restoredStates: [UUID: DocumentWorkspaceTabState] = [:]
+            var restoredURLs = Set<URL>()
+
+            for recoveredTab in manifest.tabs {
+                let state = try makeWorkspaceState(from: recoveredTab)
+                if let url = state.currentURL {
+                    let canonicalURL = canonicalDocumentURL(url)
+                    guard restoredURLs.insert(canonicalURL).inserted else {
+                        throw WorkspaceRecoveryError.duplicateDocument
+                    }
+                }
+                restoredTabs.append(workspaceTab(from: state, id: recoveredTab.id))
+                restoredStates[recoveredTab.id] = state
+            }
+
+            workspaceTabs = restoredTabs
+            workspaceTabStates = restoredStates
+            let requestedActiveID = manifest.activeTabID
+            activeTabID = requestedActiveID.flatMap { id in
+                restoredTabs.contains(where: { $0.id == id }) ? id : nil
+            } ?? restoredTabs[0].id
+            if let activeTabID, let activeState = restoredStates[activeTabID] {
+                loadWorkspaceState(activeState)
+            }
+            auditLogger.info("workspace_recovery_restored", metadata: ["tabs": restoredTabs.count])
+            return true
+        } catch {
+            do {
+                try workspaceRecoveryStore.quarantine()
+            } catch {
+                auditLogger.error("workspace_recovery_quarantine_failed", error: error)
+            }
+            auditLogger.error("workspace_recovery_restore_failed", error: error)
+            return false
+        }
+    }
+
+    private func makeWorkspaceState(from recoveredTab: WorkspaceRecoveryTab) throws -> DocumentWorkspaceTabState {
+        let resolvedURL = recoveredTab.resolveURL()
+        let fileExists = resolvedURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+
+        if !recoveredTab.isDirty, let resolvedURL, fileExists {
+            let didAccessSecurityScope = resolvedURL.startAccessingSecurityScopedResource()
+            defer {
+                if didAccessSecurityScope {
+                    resolvedURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            if let loaded = try? loadAttributedString(from: resolvedURL) {
+                return DocumentWorkspaceTabState(
+                    title: resolvedURL.deletingPathExtension().lastPathComponent,
+                    attributedText: loaded.text,
+                    currentURL: resolvedURL,
+                    currentType: loaded.type,
+                    authoringMode: loaded.mode,
+                    codeLanguage: loaded.codeLanguage ?? recoveredTab.codeLanguage,
+                    screenplayElement: recoveredTab.screenplayElement,
+                    pageLayout: loaded.pageLayout,
+                    hasUnsavedChanges: false,
+                    editorLocation: recoveredTab.editorLocation
+                )
+            }
+        }
+
+        let namedFileUnavailable = recoveredTab.filePath != nil && !fileExists
+        let diskVersionChanged = recoveredTab.isDirty
+            && fileExists
+            && resolvedURL.map { !recoveredTab.matchesDiskVersion(at: $0) } == true
+        let recoveredTitle: String
+        if namedFileUnavailable {
+            recoveredTitle = "\(recoveredTab.title) (Recovered)"
+        } else if diskVersionChanged {
+            recoveredTitle = "\(recoveredTab.title) (Recovered Conflict)"
+        } else {
+            recoveredTitle = recoveredTab.title
+        }
+        return DocumentWorkspaceTabState(
+            title: recoveredTitle,
+            attributedText: try recoveredTab.archive.makeAttributedString(),
+            currentURL: fileExists && !diskVersionChanged ? resolvedURL : nil,
+            currentType: UTType(recoveredTab.currentTypeIdentifier)
+                ?? defaultDocumentType(for: recoveredTab.authoringMode),
+            authoringMode: recoveredTab.authoringMode,
+            codeLanguage: recoveredTab.codeLanguage,
+            screenplayElement: recoveredTab.screenplayElement,
+            pageLayout: recoveredTab.archive.pageLayout.sanitized,
+            hasUnsavedChanges: recoveredTab.isDirty || namedFileUnavailable,
+            editorLocation: recoveredTab.editorLocation
+        )
     }
 
     private func autosaveCurrentTabIfNeeded() {
@@ -1831,7 +2011,7 @@ extension DocumentSession {
     }
 }
 
-private struct MongrelDocumentArchive: Codable {
+struct MongrelDocumentArchive: Codable {
     struct ElementRange: Codable {
         let location: Int
         let length: Int

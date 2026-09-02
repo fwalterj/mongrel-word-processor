@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import SwiftUI
 import SharedFoundation
 
@@ -13,6 +15,12 @@ struct MongrelWordProcessorApp: App {
                 .frame(minWidth: 980, minHeight: 680)
                 .onOpenURL { url in
                     session.openExternalDocument(at: url)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+                    session.flushWorkspaceRecovery()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    session.flushWorkspaceRecovery()
                 }
         }
         .windowStyle(.hiddenTitleBar)

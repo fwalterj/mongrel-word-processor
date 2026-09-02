@@ -2,10 +2,10 @@
 
 ## Scope
 - Validate document lifecycle reliability and truthful action behavior:
-  - New/Open/Reopen/Close
+  - New/Open/Reopen/Close across mixed-mode tabs
   - Save/Save As/Export
   - Unsaved-change prompts and dirty-state indicator
-  - Recovery behavior for stale last-document bookmarks
+  - Workspace recovery and stale last-document bookmarks
   - Workflow audit logging coverage
 
 ## Preflight
@@ -15,11 +15,13 @@
 - [ ] Keyboard shortcuts trigger intended actions.
 
 ## Document Lifecycle
-- [ ] `New Document` prompts when unsaved changes exist and follows Save/Discard/Cancel correctly.
-- [ ] `Open...` prompts when unsaved changes exist and opens valid files.
+- [ ] `New Document`, `New Screenplay`, and `New Code File` preserve the current project in its tab.
+- [ ] `Open...` accepts multiple files without abandoning dirty or untitled tabs.
 - [ ] `Reopen Last Document` restores last document when available.
 - [ ] Stale/invalid reopen bookmark is handled gracefully and clears invalid persisted reference.
-- [ ] `Close Document` clears content/title/current path and resets dirty state.
+- [ ] Closing a dirty tab follows Save/Discard/Cancel correctly; cancelling restores prior focus.
+- [ ] Closing a clean background tab does not steal focus.
+- [ ] Reopen Closed Tab restores content without creating duplicate ownership of an open file.
 
 ## Save and Export
 - [ ] `Save` writes to current path and clears unsaved indicator.
@@ -43,6 +45,17 @@
 - [ ] Last-document bookmark updates after successful open and save.
 - [ ] Reopen works across app relaunch.
 - [ ] Reopen remains disabled when no valid persisted bookmark exists.
+- [ ] Mixed named and untitled tabs restore in their prior order and mode after relaunch.
+- [ ] Dirty recovery content wins over the disk copy; clean named tabs reload the latest disk content.
+- [ ] A deleted named file is restored as an unsaved recovered copy.
+- [ ] Corrupt or oversized recovery data is quarantined and the app starts clean.
+- [ ] A single pristine blank workspace does not leave a recovery manifest.
+
+## Tab Autosave
+- [ ] Autosave-on-switch saves dirty named files without prompting.
+- [ ] Untitled tabs remain dirty and never trigger an unsolicited Save panel.
+- [ ] Autosave skips interchange formats when native headers, footers, or page colors would be lost.
+- [ ] Save As refuses to overwrite a path owned by another open tab.
 
 ## Logging and Diagnostics
 - [ ] Workflow events are logged for open/reopen/new/close/save/export operations.
