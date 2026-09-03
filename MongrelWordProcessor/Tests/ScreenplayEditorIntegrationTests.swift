@@ -224,6 +224,8 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(font.pointSize, 14)
         XCTAssertEqual(harness.textView.textContainerInset, NSSize(width: 28, height: 24))
         XCTAssertNotNil(harness.textView.typingAttributes[.foregroundColor] as? NSColor)
+        XCTAssertNotNil(harness.textView.selectedTextAttributes[.backgroundColor] as? NSColor)
+        XCTAssertNotNil(harness.textView.selectedTextAttributes[.foregroundColor] as? NSColor)
     }
 
     func testCodeTypographyPreferenceChangesRenderedFontSize() throws {

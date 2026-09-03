@@ -6,8 +6,8 @@ A native macOS writing environment that treats prose and screenplays as first-cl
 
 ## What works
 
-- Native prose, code, and screenplay authoring modes.
-- Mixed-mode workspace tabs for keeping prose, screenplay, and code projects live together.
+- Native prose, coding, and screenplay authoring modes.
+- Mixed-mode workspace tabs for keeping prose, screenplay, and coding projects live together, with independent tab duplication and file actions.
 - Autosave-on-tab-switch for named files, plus versioned local workspace recovery for untitled and dirty tabs.
 - True US Letter screenplay pages with live page and scene counts.
 - Scene heading, action, character, parenthetical, dialogue, transition, shot, insert/title card, and time-jump elements.
@@ -18,6 +18,7 @@ A native macOS writing environment that treats prose and screenplays as first-cl
 - Native `.mgscreenplay` files that retain semantic screenplay elements other formats cannot preserve.
 - PDF, DOCX, RTF, and plain-text export.
 - Focus and typewriter modes, zoom controls, recent documents, and a command palette.
+- A responsive coding canvas with language-aware editing plus live file, storage, line-ending, wrap, cursor, and selection status.
 - Standard, high-contrast, and custom color viewing modes.
 - Document insights for reading time, paragraph rhythm, sentence density, scene weight, dialogue share, and character cue counts.
 - App-managed OpenType and TrueType font installation, using local font files whose licenses permit use.

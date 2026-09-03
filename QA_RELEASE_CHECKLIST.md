@@ -13,10 +13,14 @@
 - [ ] App launches without runtime warnings or crashes.
 - [ ] Menu command enable/disable states are accurate.
 - [ ] Keyboard shortcuts trigger intended actions.
+- [ ] Formatting controls remain single-line and horizontally scrollable at the minimum window width.
+- [ ] Coding status adapts at narrow widths without clipping the language, filename, or cursor position.
 
 ## Document Lifecycle
-- [ ] `New Document`, `New Screenplay`, and `New Code File` preserve the current project in its tab.
+- [ ] `New Document`, `New Screenplay`, and `New Source File` preserve the current project in its tab.
 - [ ] `Open...` accepts multiple files without abandoning dirty or untitled tabs.
+- [ ] `Duplicate Tab` creates an independent unsaved copy without sharing the original file URL.
+- [ ] Tab context actions reveal named files, copy their paths, and remain unavailable for untitled tabs.
 - [ ] `Reopen Last Document` restores last document when available.
 - [ ] Stale/invalid reopen bookmark is handled gracefully and clears invalid persisted reference.
 - [ ] Closing a dirty tab follows Save/Discard/Cancel correctly; cancelling restores prior focus.

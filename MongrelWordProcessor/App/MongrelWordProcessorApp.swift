@@ -50,7 +50,7 @@ private struct WordProcessorCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
-            Button("New Code File") {
+            Button("New Source File") {
                 session.newCodeDocument()
             }
             .keyboardShortcut("n", modifiers: [.command, .option])
@@ -153,6 +153,12 @@ private struct WordProcessorCommands: Commands {
             .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(!session.canReopenClosedTab)
 
+            Button("Duplicate Current Tab") {
+                if let activeTabID = session.activeTabID {
+                    session.duplicateTab(activeTabID)
+                }
+            }
+
             Divider()
 
             Toggle("Autosave Named Tabs on Switch", isOn: $session.autosaveOnTabSwitch)
@@ -210,7 +216,7 @@ private struct WordProcessorCommands: Commands {
             .keyboardShortcut("0", modifiers: .command)
         }
 
-        CommandMenu("Code") {
+        CommandMenu("Coding") {
             Button("Toggle Line Comment") {
                 session.toggleCodeComment()
             }

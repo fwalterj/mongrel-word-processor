@@ -105,7 +105,7 @@ enum AuthoringMode: String, CaseIterable {
     var title: String {
         switch self {
         case .prose: return "Prose"
-        case .code: return "Code"
+        case .code: return "Coding"
         case .screenplay: return "Screenplay"
         }
     }
@@ -575,6 +575,20 @@ final class DocumentSession: ObservableObject {
         codeUseTabs ? "Tabs · \(codeTabWidth) columns" : "Spaces · \(codeTabWidth)"
     }
 
+    var codeLineEndingSummary: String {
+        if attributedText.string.contains("\r\n") { return "CRLF" }
+        if attributedText.string.contains("\r") { return "CR" }
+        return "LF"
+    }
+
+    var codeStorageSummary: String {
+        if currentType == .mongrelDocument { return "MONGREL" }
+        if currentType == .rtf { return "RTF" }
+        if currentType == .rtfd { return "RTFD" }
+        if currentType == .wordDocument { return "DOCX" }
+        return "UTF-8 SAVE"
+    }
+
     var companionSpellcheckSummary: String {
         companionLexicon.status.summary
     }
@@ -738,6 +752,31 @@ final class DocumentSession: ObservableObject {
         ))
         workspaceTabStates[id] = state
         activateWorkspaceTab(id, autosaveCurrent: false)
+    }
+
+    func duplicateTab(_ id: UUID) {
+        if activeTabID == id {
+            syncActiveTabState()
+        }
+        guard var state = workspaceTabStates[id] else { return }
+        state.title = "\(state.title) Copy"
+        state.attributedText = state.attributedText.copy() as? NSAttributedString ?? state.attributedText
+        state.currentURL = nil
+        state.hasUnsavedChanges = true
+        state.editorLocation = EditorLocationSnapshot()
+        installNewWorkspaceTab(state: state, reuseActiveTab: false)
+        auditLogger.info("duplicate_workspace_tab", metadata: ["mode": state.authoringMode.rawValue])
+    }
+
+    func revealDocumentInFinder(forTab id: UUID) {
+        guard let url = workspaceTabStates[id]?.currentURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func copyDocumentPath(forTab id: UUID) {
+        guard let path = workspaceTabStates[id]?.currentURL?.path else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
     }
 
     func markDirty() {
@@ -1477,7 +1516,7 @@ final class DocumentSession: ObservableObject {
             type = .mongrelScreenplay
             element = .sceneHeading
         case .code:
-            title = "Untitled Code"
+            title = "Untitled Source"
             type = codeLanguage.contentType
             element = .action
         }

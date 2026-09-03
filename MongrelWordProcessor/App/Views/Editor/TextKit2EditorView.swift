@@ -830,6 +830,10 @@ struct TextKit2EditorView: NSViewRepresentable {
             textView.typingAttributes = typingAttributes
             textView.defaultParagraphStyle = paragraph
             textView.insertionPointColor = palette.caret
+            textView.selectedTextAttributes = [
+                .backgroundColor: palette.caret.withAlphaComponent(0.24),
+                .foregroundColor: palette.base
+            ]
             guard fullRange.length > 0 else { return }
 
             storage.beginEditing()

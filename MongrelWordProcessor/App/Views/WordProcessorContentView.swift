@@ -247,7 +247,7 @@ struct WordProcessorContentView: View {
             Menu {
                 Button("New Document") { session.newDocument() }
                 Button("New Screenplay") { session.newScreenplay() }
-                Button("New Code File") { session.newCodeDocument() }
+                Button("New Source File") { session.newCodeDocument() }
                 Divider()
                 Button("Reopen Closed Tab") { session.reopenClosedTab() }
                     .disabled(!session.canReopenClosedTab)
@@ -347,6 +347,24 @@ struct WordProcessorContentView: View {
             }
         }
         .help(tab.url?.path ?? "Unsaved \(tab.mode.title.lowercased()) project")
+        .contextMenu {
+            Button("Duplicate Tab") {
+                session.duplicateTab(tab.id)
+            }
+            if tab.url != nil {
+                Divider()
+                Button("Reveal in Finder") {
+                    session.revealDocumentInFinder(forTab: tab.id)
+                }
+                Button("Copy File Path") {
+                    session.copyDocumentPath(forTab: tab.id)
+                }
+            }
+            Divider()
+            Button("Close Tab") {
+                session.closeTab(tab.id)
+            }
+        }
     }
 
     private func workspaceTabAccent(_ mode: AuthoringMode) -> Color {
@@ -404,7 +422,7 @@ struct WordProcessorContentView: View {
                 Button("New Screenplay") {
                     session.newScreenplay()
                 }
-                Button("New Code File") {
+                Button("New Source File") {
                     session.newCodeDocument()
                 }
             } label: {
@@ -651,15 +669,19 @@ struct WordProcessorContentView: View {
 
     private var formattingToolbar: some View {
         HStack(spacing: 6) {
-            if session.authoringMode == .screenplay {
-                screenplayToolbar
-            } else if session.authoringMode == .code {
-                codeToolbar
-            } else {
-                proseToolbar
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if session.authoringMode == .screenplay {
+                        screenplayToolbar
+                    } else if session.authoringMode == .code {
+                        codeToolbar
+                    } else {
+                        proseToolbar
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
-
-            Spacer()
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
 
             Button("Reopen Last") {
                 session.reopenLastDocument()
@@ -667,6 +689,7 @@ struct WordProcessorContentView: View {
             .buttonStyle(.plain)
             .foregroundStyle(DesignTokens.accent)
             .disabled(!session.hasRestorableLastDocument)
+            .fixedSize()
         }
         .padding(.horizontal, 12)
         .padding(.top, 5)
@@ -902,13 +925,7 @@ struct WordProcessorContentView: View {
                     .scrollIndicators(.visible)
                 }
             } else if session.authoringMode == .code {
-                coreEditor(editorZoom: session.editorZoom)
-                    .background(selectedEditorBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(DesignTokens.borderRim.opacity(0.45), lineWidth: 0.6)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                codingEditorCanvas
             } else {
                 proseEditorCanvas
             }
@@ -928,6 +945,117 @@ struct WordProcessorContentView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private var codingEditorCanvas: some View {
+        VStack(spacing: 0) {
+            codingCanvasHeader
+
+            ZStack(alignment: .leading) {
+                selectedEditorBackground
+
+                LinearGradient(
+                    colors: [codeAccentColor.opacity(0.82), codeAccentColor.opacity(0.08)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(width: 2)
+                .padding(.vertical, 14)
+
+                coreEditor(editorZoom: session.editorZoom)
+            }
+        }
+        .background(codeBackground.0)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(codeAccentColor.opacity(0.32), lineWidth: 0.7)
+        }
+        .shadow(color: codeAccentColor.opacity(0.08), radius: 24, y: 10)
+    }
+
+    private var codingCanvasHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            codingCanvasHeaderContent(showsPath: true, showsDetails: true)
+            codingCanvasHeaderContent(showsPath: false, showsDetails: true)
+            codingCanvasHeaderContent(showsPath: false, showsDetails: false)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .background(
+            LinearGradient(
+                colors: [DesignTokens.glassElevated.opacity(0.92), DesignTokens.glassBase.opacity(0.82)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(codeAccentColor.opacity(0.22))
+                .frame(height: 0.5)
+        }
+    }
+
+    private func codingCanvasHeaderContent(showsPath: Bool, showsDetails: Bool) -> some View {
+        HStack(spacing: 9) {
+            Circle()
+                .fill(codeAccentColor)
+                .frame(width: 7, height: 7)
+                .shadow(
+                    color: codeAccentColor.opacity(session.hasUnsavedChanges ? 0.72 : 0.28),
+                    radius: session.hasUnsavedChanges ? 5 : 2
+                )
+
+            Text(session.codeLanguage.title.uppercased())
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(codeAccentColor)
+
+            Text(codingFileLabel)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.82))
+                .lineLimit(1)
+
+            if showsPath, let path = session.currentURL?.path(percentEncoded: false) {
+                Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(DesignTokens.chromeText.opacity(0.38))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            if showsDetails {
+                codingHeaderMetric(session.codeStorageSummary)
+                codingHeaderMetric(session.codeLineEndingSummary)
+                codingHeaderMetric(session.codeLineWrap ? "WRAP" : "NO WRAP")
+            }
+
+            Text("LN \(session.codeCursorLine) : \(session.codeCursorColumn)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(DesignTokens.chromeText.opacity(0.72))
+
+            if session.codeSelectionLength > 0 {
+                Text("SEL \(session.codeSelectionLength)")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(codeAccentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(codeAccentColor.opacity(0.12), in: Capsule())
+            }
+        }
+    }
+
+    private func codingHeaderMetric(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(DesignTokens.chromeText.opacity(0.46))
+    }
+
+    private var codingFileLabel: String {
+        session.currentURL?.lastPathComponent
+            ?? "UNTITLED.\(session.codeLanguage.preferredFilenameExtension.uppercased())"
     }
 
     private var proseEditorCanvas: some View {
@@ -1295,9 +1423,15 @@ struct WordProcessorContentView: View {
             if session.authoringMode == .code {
                 codeBackground.0
                 LinearGradient(
-                    colors: [codeBackground.1.opacity(0.42), .clear],
+                    colors: [codeBackground.1.opacity(0.50), .clear],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
+                )
+                RadialGradient(
+                    colors: [codeAccentColor.opacity(0.10), .clear],
+                    center: .topTrailing,
+                    startRadius: 0,
+                    endRadius: 520
                 )
             } else if session.authoringMode == .screenplay {
                 screenplayPaperBackground
@@ -1347,6 +1481,17 @@ struct WordProcessorContentView: View {
             return (Color(red: 0.07, green: 0.12, blue: 0.14), Color(red: 0.16, green: 0.39, blue: 0.45))
         case .amber:
             return (Color(red: 0.13, green: 0.10, blue: 0.08), Color(red: 0.42, green: 0.28, blue: 0.14))
+        }
+    }
+
+    private var codeAccentColor: Color {
+        switch session.codeTheme {
+        case .studio: return Color(red: 0.39, green: 0.78, blue: 0.92)
+        case .paper: return Color(red: 0.16, green: 0.38, blue: 0.68)
+        case .midnight: return Color(red: 0.32, green: 0.78, blue: 1.00)
+        case .cobalt: return Color(red: 0.38, green: 0.68, blue: 1.00)
+        case .frost: return Color(red: 0.30, green: 0.88, blue: 0.84)
+        case .amber: return Color(red: 0.96, green: 0.63, blue: 0.22)
         }
     }
 
@@ -1401,9 +1546,9 @@ struct WordProcessorContentView: View {
             )
 
             shortcutSection(
-                "Code Mode",
+                "Coding",
                 items: [
-                    ("Cmd + Option + N", "New code file"),
+                    ("Cmd + Option + N", "New source file"),
                     ("Tab / Shift + Tab", "Indent / outdent"),
                     ("Cmd + /", "Toggle line comment"),
                     ("Cmd + Shift + D", "Duplicate selected lines"),
@@ -1463,6 +1608,10 @@ struct WordProcessorContentView: View {
             session.saveDocument()
         case .saveCopy:
             session.saveDocumentCopyAs()
+        case .duplicateTab:
+            if let activeTabID = session.activeTabID {
+                session.duplicateTab(activeTabID)
+            }
         case .printDocument:
             session.printDocument()
         case .toggleFocusMode:
@@ -2066,6 +2215,7 @@ private enum WordProcessorPaletteAction: Hashable {
     case openDocument
     case saveDocument
     case saveCopy
+    case duplicateTab
     case printDocument
     case toggleFocusMode
     case toggleTypewriterMode
@@ -2085,10 +2235,11 @@ private enum WordProcessorPaletteAction: Hashable {
         switch self {
         case .newDocument: return "New Document"
         case .newScreenplay: return "New Screenplay"
-        case .newCodeDocument: return "New Code File"
+        case .newCodeDocument: return "New Source File"
         case .openDocument: return "Open Document"
         case .saveDocument: return "Save Document"
         case .saveCopy: return "Save a Copy"
+        case .duplicateTab: return "Duplicate Current Tab"
         case .printDocument: return "Print Document"
         case .toggleFocusMode: return "Toggle Focus Mode"
         case .toggleTypewriterMode: return "Toggle Typewriter Scrolling"
@@ -2097,12 +2248,12 @@ private enum WordProcessorPaletteAction: Hashable {
         case .resetZoom: return "Actual Size"
         case .clearRecentDocuments: return "Clear Recent Documents"
         case .autoFormatScreenplay: return "Screenplay: Auto Format Document"
-        case .toggleCodeComment: return "Code: Toggle Line Comment"
-        case .duplicateCodeLines: return "Code: Duplicate Lines"
+        case .toggleCodeComment: return "Coding: Toggle Line Comment"
+        case .duplicateCodeLines: return "Coding: Duplicate Lines"
         case .setMode(let mode): return "Authoring Mode: \(mode.title)"
         case .setScreenplayElement(let element): return "Screenplay Element: \(element.title)"
-        case .setLanguage(let language): return "Code Language: \(language.title)"
-        case .setTheme(let theme): return "Code Theme: \(theme.title)"
+        case .setLanguage(let language): return "Coding Language: \(language.title)"
+        case .setTheme(let theme): return "Coding Theme: \(theme.title)"
         }
     }
 
@@ -2114,6 +2265,7 @@ private enum WordProcessorPaletteAction: Hashable {
         case .openDocument: return "folder"
         case .saveDocument: return "square.and.arrow.down"
         case .saveCopy: return "doc.on.doc"
+        case .duplicateTab: return "plus.square.on.square"
         case .printDocument: return "printer"
         case .toggleFocusMode: return "viewfinder"
         case .toggleTypewriterMode: return "scope"
@@ -2182,7 +2334,7 @@ private struct WordProcessorCommandPaletteView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let match: (WordProcessorPaletteAction) -> Bool = { q.isEmpty || fuzzyMatches(q, in: $0.title) }
 
-        let fileItems  = [WordProcessorPaletteAction.newDocument, .newScreenplay, .newCodeDocument, .openDocument, .saveDocument, .saveCopy, .printDocument, .clearRecentDocuments].filter(match)
+        let fileItems  = [WordProcessorPaletteAction.newDocument, .newScreenplay, .newCodeDocument, .openDocument, .saveDocument, .saveCopy, .duplicateTab, .printDocument, .clearRecentDocuments].filter(match)
         let writingItems = [WordProcessorPaletteAction.toggleFocusMode, .toggleTypewriterMode, .zoomIn, .zoomOut, .resetZoom].filter(match)
         let modeItems  = AuthoringMode.allCases.map { WordProcessorPaletteAction.setMode($0) }.filter(match)
         let screenplayItems = ([WordProcessorPaletteAction.autoFormatScreenplay]
@@ -2196,7 +2348,7 @@ private struct WordProcessorCommandPaletteView: View {
         if !writingItems.isEmpty { sections.append(PaletteSection(title: "Writing", items: writingItems)) }
         if !modeItems.isEmpty  { sections.append(PaletteSection(title: "Mode",       items: modeItems))  }
         if !screenplayItems.isEmpty { sections.append(PaletteSection(title: "Screenplay", items: screenplayItems)) }
-        if !codeItems.isEmpty { sections.append(PaletteSection(title: "Code", items: codeItems)) }
+        if !codeItems.isEmpty { sections.append(PaletteSection(title: "Coding", items: codeItems)) }
         if !langItems.isEmpty  { sections.append(PaletteSection(title: "Language",   items: langItems))  }
         if !themeItems.isEmpty { sections.append(PaletteSection(title: "Theme",      items: themeItems)) }
         return sections

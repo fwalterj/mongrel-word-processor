@@ -224,7 +224,7 @@ final class DocumentSessionTests: XCTestCase {
 
         session.newCodeDocument()
 
-        XCTAssertEqual(session.title, "Untitled Code")
+        XCTAssertEqual(session.title, "Untitled Source")
         XCTAssertEqual(session.authoringMode, .code)
         XCTAssertEqual(session.codeLanguage, .python)
         XCTAssertEqual(session.attributedText.length, 0)
@@ -269,6 +269,56 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(session.authoringMode, .code)
         XCTAssertEqual(session.codeLanguage, .sql)
         XCTAssertEqual(session.attributedText.string, "print(\"ready\")\n")
+    }
+
+    @MainActor
+    func testCodingModeUsesUserFacingCodingLabelAndReportsLineEndings() {
+        let session = makeSession()
+
+        XCTAssertEqual(AuthoringMode.code.title, "Coding")
+
+        session.newCodeDocument()
+        XCTAssertEqual(session.codeStorageSummary, "UTF-8 SAVE")
+        session.attributedText = NSAttributedString(string: "one\r\ntwo\r\n")
+        XCTAssertEqual(session.codeLineEndingSummary, "CRLF")
+
+        session.attributedText = NSAttributedString(string: "one\rtwo\r")
+        XCTAssertEqual(session.codeLineEndingSummary, "CR")
+
+        session.attributedText = NSAttributedString(string: "one\ntwo\n")
+        XCTAssertEqual(session.codeLineEndingSummary, "LF")
+    }
+
+    @MainActor
+    func testDuplicateTabCreatesIndependentUnsavedCopyAcrossModes() throws {
+        let session = makeSession()
+        let destination = temporaryDirectory.appendingPathComponent("Original.mgscreenplay")
+        session.newScreenplay()
+        session.attributedText = NSAttributedString(string: "INT. STUDIO - NIGHT\n")
+        session.pageLayout.header.isEnabled = true
+        session.pageLayout.header.text = "Private"
+        session.markDirty()
+        XCTAssertTrue(session.saveDocument(to: destination, type: .mongrelScreenplay))
+        let originalID = try XCTUnwrap(session.activeTabID)
+
+        session.duplicateTab(originalID)
+        let duplicateID = try XCTUnwrap(session.activeTabID)
+
+        XCTAssertNotEqual(duplicateID, originalID)
+        XCTAssertEqual(session.workspaceTabs.count, 2)
+        XCTAssertEqual(session.title, "Original Copy")
+        XCTAssertEqual(session.authoringMode, .screenplay)
+        XCTAssertEqual(session.attributedText.string, "INT. STUDIO - NIGHT\n")
+        XCTAssertEqual(session.pageLayout.header.text, "Private")
+        XCTAssertNil(session.currentURL)
+        XCTAssertTrue(session.hasUnsavedChanges)
+
+        session.attributedText = NSAttributedString(string: "EXT. STREET - MORNING\n")
+        session.markDirty()
+        session.switchToTab(originalID)
+        XCTAssertEqual(session.attributedText.string, "INT. STUDIO - NIGHT\n")
+        XCTAssertEqual(session.currentURL, destination)
+        XCTAssertFalse(session.hasUnsavedChanges)
     }
 
     @MainActor
@@ -773,6 +823,7 @@ final class DocumentSessionTests: XCTestCase {
         let destination = temporaryDirectory.appendingPathComponent("Native.mongreldoc")
 
         XCTAssertTrue(source.saveDocument(to: destination, type: .mongrelDocument))
+        XCTAssertEqual(source.codeStorageSummary, "MONGREL")
 
         let reopened = makeSession()
         XCTAssertTrue(reopened.openDocument(at: destination))
