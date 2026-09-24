@@ -2,38 +2,158 @@ import SwiftUI
 import AppKit
 import SharedFoundation
 
-private final class ScreenplayTextView: NSTextView {
+final class ScreenplayTextView: NSTextView {
+    static let nativeSelectionType = NSPasteboard.PasteboardType("com.mongrel.screenplay-selection")
+    private(set) var isPastingNativeContent = false
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        isScreenplayPaginationActive ? [Self.nativeSelectionType] + super.writablePasteboardTypes : super.writablePasteboardTypes
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        isScreenplayPaginationActive ? [Self.nativeSelectionType] + super.readablePasteboardTypes : super.readablePasteboardTypes
+    }
+
+    override func writeSelection(to pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard type == Self.nativeSelectionType else { return super.writeSelection(to: pasteboard, type: type) }
+        guard let storage = textStorage else { return false }
+        let selection = selectedRange()
+        guard selection.location <= storage.length, selection.length <= storage.length - selection.location else { return false }
+        do {
+            let archive = try MongrelDocumentArchive(attributedText: storage.attributedSubstring(from: selection), authoringMode: .screenplay, pageLayout: .empty)
+            return pasteboard.setData(try JSONEncoder().encode(archive), forType: type)
+        } catch { return false }
+    }
+
+    override func readSelection(from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard type == Self.nativeSelectionType else { return super.readSelection(from: pasteboard, type: type) }
+        guard let data = pasteboard.data(forType: type), data.count <= 256 * 1_024 * 1_024,
+              let archive = try? JSONDecoder().decode(MongrelDocumentArchive.self, from: data),
+              let restored = try? archive.makeAttributedString() else { return false }
+        let incoming = NSMutableAttributedString(attributedString: restored)
+        var existingIDs = Set<String>()
+        let selection = selectedRange()
+        textStorage?.enumerateAttribute(.screenplaySceneIdentity, in: NSRange(location: 0, length: textStorage?.length ?? 0)) { value, range, _ in
+            if let id = value as? String, NSIntersectionRange(range, selection).length < range.length { existingIDs.insert(id) }
+        }
+        // A cut-and-pasted scene keeps its identity. A copied scene gets a new one,
+        // even when it is pasted ahead of the original in the same document.
+        var duplicateRanges: [(NSRange, String)] = []
+        var copiedIDs: [String: String] = [:]
+        incoming.enumerateAttribute(.screenplaySceneIdentity, in: NSRange(location: 0, length: incoming.length)) { value, range, _ in
+            if let id = value as? String, existingIDs.contains(id) {
+                let replacement = copiedIDs[id] ?? UUID().uuidString
+                copiedIDs[id] = replacement
+                duplicateRanges.append((range, replacement))
+            }
+        }
+        // Explicit fresh IDs also prevent AppKit from inheriting the adjacent
+        // scene's identity when an untagged attributed string is inserted.
+        for (range, replacement) in duplicateRanges { incoming.addAttribute(.screenplaySceneIdentity, value: replacement, range: range) }
+        isPastingNativeContent = true
+        defer { isPastingNativeContent = false }
+        insertText(incoming, replacementRange: selection)
+        return true
+    }
+
     var pageBackgroundColor = NSColor(red: 0.97, green: 0.95, blue: 0.89, alpha: 1) {
-        didSet { needsDisplay = true }
+        didSet { refreshScreenplayOverlay() }
     }
     var pageTextColor = NSColor(calibratedWhite: 0.08, alpha: 1) {
-        didSet { needsDisplay = true }
+        didSet { refreshScreenplayOverlay() }
     }
     var isScreenplayPaginationActive: Bool = false {
         didSet {
             guard isScreenplayPaginationActive != oldValue else { return }
-            needsDisplay = true
+            refreshScreenplayOverlay()
         }
     }
 
     var screenplayPageCount: Int = 1 {
         didSet {
             guard screenplayPageCount != oldValue else { return }
-            needsDisplay = true
+            refreshScreenplayOverlay()
         }
+    }
+
+    var numberedScenes: [ScreenplayScene] = [] {
+        didSet { if numberedScenes != oldValue { refreshScreenplayOverlay() } }
     }
 
     override var isOpaque: Bool { false }
 
-    override func draw(_ dirtyRect: NSRect) {
-        if isScreenplayPaginationActive {
-            drawScreenplayPages(in: dirtyRect)
+    private lazy var screenplayOverlay = ScreenplayFurnitureView(frame: .zero)
+    private weak var observedClipView: NSClipView?
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if let observedClipView {
+            NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: observedClipView)
         }
-        super.draw(dirtyRect)
+        observedClipView = enclosingScrollView?.contentView
+        if let observedClipView {
+            observedClipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(viewportDidScroll), name: NSView.boundsDidChangeNotification, object: observedClipView)
+        }
+        refreshScreenplayOverlay()
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func viewportDidScroll() { refreshScreenplayOverlay() }
+
+    func refreshScreenplayOverlay() {
+        if screenplayOverlay.superview == nil {
+            screenplayOverlay.textView = self
+            screenplayOverlay.wantsLayer = true
+            screenplayOverlay.layer?.zPosition = 1
+            addSubview(screenplayOverlay, positioned: .above, relativeTo: nil)
+        }
+        // Keep the backing layer viewport-sized even for thousand-page scripts.
+        let viewport = visibleRect
+        screenplayOverlay.frame = viewport
+        screenplayOverlay.bounds = viewport
+        screenplayOverlay.isHidden = !isScreenplayPaginationActive
+        screenplayOverlay.needsDisplay = true
+    }
+
+    fileprivate func drawScreenplayFurniture(in dirtyRect: NSRect) {
+        guard isScreenplayPaginationActive else { return }
+        // TextKit 2 renders glyphs in layers. A transparent sibling layer keeps
+        // margin furniture above the native editor's background without eating clicks.
+        drawScreenplayPages(in: dirtyRect)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: pageTextColor
+        ]
+        for (number, rect) in sceneNumberPlacements() where dirtyRect.intersects(rect) {
+            number.draw(at: NSPoint(x: 40, y: rect.minY), withAttributes: attrs)
+            number.draw(at: NSPoint(x: 548, y: rect.minY), withAttributes: attrs)
+        }
+    }
+
+    func sceneNumberPlacements() -> [(String, NSRect)] {
+        numberedScenes.compactMap { scene in
+            guard scene.location < (string as NSString).length else { return nil }
+            let lineRect: NSRect
+            if let manager = textLayoutManager, let content = manager.textContentManager,
+               let location = content.location(content.documentRange.location, offsetBy: scene.location),
+               let fragment = manager.textLayoutFragment(for: location) {
+                let line = fragment.textLineFragments.first?.typographicBounds ?? .zero
+                lineRect = NSRect(x: 0, y: fragment.layoutFragmentFrame.minY + line.minY,
+                                  width: bounds.width, height: max(line.height, 14))
+            } else if textLayoutManager == nil, let manager = layoutManager {
+                let glyph = manager.glyphIndexForCharacter(at: scene.location)
+                lineRect = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            } else {
+                return nil
+            }
+            return (scene.displayNumber, NSRect(x: 0, y: lineRect.minY + textContainerInset.height,
+                                                width: bounds.width, height: lineRect.height))
+        }
     }
 
     private func drawScreenplayPages(in dirtyRect: NSRect) {
-        let pageColor = pageBackgroundColor
         let seamColor = pageTextColor.withAlphaComponent(0.28)
         let numberColor = pageTextColor.withAlphaComponent(0.72)
         let pageWidth = ScreenplayPageLayout.pageSize.width
@@ -47,9 +167,6 @@ private final class ScreenplayTextView: NSTextView {
                 height: pageHeight
             )
             guard dirtyRect.intersects(pageRect) else { continue }
-
-            pageColor.setFill()
-            pageRect.fill()
 
             if pageIndex > 0 {
                 seamColor.setStroke()
@@ -75,6 +192,28 @@ private final class ScreenplayTextView: NSTextView {
     }
 }
 
+private final class ScreenplayFurnitureView: NSView {
+    weak var textView: ScreenplayTextView?
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        textView?.drawScreenplayFurniture(in: dirtyRect)
+    }
+}
+
+/// Immutable render configuration; safe even if TextKit requests link attributes
+/// outside the main actor. The editor retains it because TextKit's delegate is weak.
+private final class ContrastLinkRenderingDelegate: NSObject, NSTextLayoutManagerDelegate {
+    private let foreground: NSColor
+    init(foreground: NSColor) { self.foreground = foreground }
+
+    func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, renderingAttributesForLink link: Any,
+                           at location: NSTextLocation, defaultAttributes renderingAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any]? {
+        [.foregroundColor: foreground, .underlineStyle: NSUnderlineStyle.single.rawValue]
+    }
+}
+
 struct TextKit2EditorView: NSViewRepresentable {
     @Binding var attributedText: NSAttributedString
     let onEdit: () -> Void
@@ -96,6 +235,10 @@ struct TextKit2EditorView: NSViewRepresentable {
     let typewriterMode: Bool
     let pageBackgroundColor: NSColor
     let pageTextColor: NSColor
+    var documentID: UUID? = nil
+    var numberedScenes: [ScreenplayScene] = []
+    var contrastPolarity: MongrelContrastPolarity? = nil
+    var onScreenplayCursorChange: (Int) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -110,6 +253,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         layoutManager.textContainer = textContainer
 
         let textView = ScreenplayTextView(frame: .zero, textContainer: textContainer)
+        textView.numberedScenes = numberedScenes
         textView.isRichText = true
         textView.usesFontPanel = true
         textView.allowsUndo = true
@@ -144,7 +288,10 @@ struct TextKit2EditorView: NSViewRepresentable {
         scrollView.documentView = textView
 
         context.coordinator.textView = textView
+        context.coordinator.startObservingCompanionLexicon()
         context.coordinator.lastMode = authoringMode
+        context.coordinator.lastDocumentID = documentID
+        context.coordinator.lastDocumentSnapshot = attributedText
         context.coordinator.lastLanguage = codeLanguage
         context.coordinator.lastTheme = codeTheme
         context.coordinator.lastCodeFont = codeFont
@@ -154,14 +301,14 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.lastTypewriterMode = typewriterMode
         context.coordinator.lastPageBackgroundColor = pageBackgroundColor
         context.coordinator.lastPageTextColor = pageTextColor
+        context.coordinator.lastContrastPolarity = contrastPolarity
         bridge.textView = textView
         bridge.documentTextColor = pageTextColor
-        context.coordinator.applyEditorMode(authoringMode, to: textView)
+        context.coordinator.applyEditorMode(authoringMode, to: textView, updatePublishedState: false)
         context.coordinator.applyCompanionSpellings(to: textView, fullDocument: true)
-        bridge.updateFormattingState(from: textView)
-        context.coordinator.updateScreenplayPagination(for: textView)
-        context.coordinator.reportCodePosition(in: textView)
+        context.coordinator.updateScreenplayPagination(for: textView, reportChange: false)
         context.coordinator.updateMagnification(editorZoom, in: scrollView)
+        context.coordinator.scheduleStateReport(for: textView)
         return scrollView
     }
 
@@ -170,23 +317,33 @@ struct TextKit2EditorView: NSViewRepresentable {
         guard !context.coordinator.isApplyingEdit else { return }
         context.coordinator.parent = self
 
-        let needsDocumentSync = authoringMode == .code
+        let changedDocument = context.coordinator.lastDocumentID != documentID
+        context.coordinator.lastDocumentID = documentID
+        let needsDocumentSync = changedDocument || (context.coordinator.lastDocumentSnapshot !== attributedText && (authoringMode == .code
             ? textView.string != attributedText.string
-            : !textView.attributedString().isEqual(to: attributedText)
+            : !textView.attributedString().isEqual(to: attributedText)))
+        context.coordinator.lastDocumentSnapshot = attributedText
         if needsDocumentSync {
             context.coordinator.isApplyingEdit = true
+            let selection = textView.selectedRange()
             textView.textStorage?.setAttributedString(attributedText)
+            if changedDocument {
+                context.coordinator.resetDocumentEditingState(in: textView)
+            } else {
+                let location = min(selection.location, attributedText.length)
+                textView.setSelectedRange(NSRange(location: location, length: min(selection.length, attributedText.length - location)))
+            }
+            context.coordinator.paginationNeedsUpdate = true
             if authoringMode == .code {
                 context.coordinator.applyCodeHighlighting(to: textView)
-                context.coordinator.reportCodePosition(in: textView)
             }
             context.coordinator.isApplyingEdit = false
         }
 
         if context.coordinator.lastMode != authoringMode {
             context.coordinator.lastMode = authoringMode
-            context.coordinator.applyEditorMode(authoringMode, to: textView)
-            context.coordinator.updateScreenplayPagination(for: textView)
+            context.coordinator.applyEditorMode(authoringMode, to: textView, updatePublishedState: false)
+            context.coordinator.updateScreenplayPagination(for: textView, reportChange: false)
         }
 
         if !context.coordinator.lastPageBackgroundColor.isEqual(pageBackgroundColor)
@@ -200,12 +357,17 @@ struct TextKit2EditorView: NSViewRepresentable {
         if context.coordinator.lastScreenplayElement != screenplayElement {
             context.coordinator.lastScreenplayElement = screenplayElement
             if authoringMode == .screenplay {
-                bridge.configureTypingAttributes(for: screenplayElement, in: textView)
+                bridge.configureTypingAttributes(
+                    for: screenplayElement,
+                    in: textView,
+                    updatePublishedState: false
+                )
+                context.coordinator.applyEditorPresentation(to: textView, refreshRendering: false)
             }
         }
 
-        if authoringMode == .screenplay {
-            context.coordinator.updateScreenplayPagination(for: textView)
+        if let screenplayTextView = textView as? ScreenplayTextView {
+            screenplayTextView.numberedScenes = numberedScenes
         }
 
         if context.coordinator.lastLanguage != codeLanguage
@@ -245,6 +407,13 @@ struct TextKit2EditorView: NSViewRepresentable {
                 context.coordinator.centerSelection(in: textView)
             }
         }
+
+        if context.coordinator.lastContrastPolarity != contrastPolarity || needsDocumentSync {
+            context.coordinator.lastContrastPolarity = contrastPolarity
+            context.coordinator.applyEditorPresentation(to: textView)
+        }
+
+        context.coordinator.scheduleStateReport(for: textView)
     }
 
     @MainActor
@@ -253,6 +422,13 @@ struct TextKit2EditorView: NSViewRepresentable {
         weak var textView: NSTextView?
         var isApplyingEdit = false
         var lastMode: AuthoringMode = .prose
+        var lastDocumentID: UUID?
+        var lastDocumentSnapshot: NSAttributedString?
+        var paginationNeedsUpdate = true
+        private var paginationWorkItem: DispatchWorkItem?
+        private var pendingInsertedRange: NSRange?
+        private var codeHighlightWorkItem: DispatchWorkItem?
+        private var codeSyntaxExpressions: [CodeLanguage: NSRegularExpression] = [:]
         var lastLanguage: CodeLanguage = .swift
         var lastTheme: CodeTheme = .studio
         var lastCodeFont: CodeFont = .systemMono
@@ -265,48 +441,126 @@ struct TextKit2EditorView: NSViewRepresentable {
         var lastTypewriterMode: Bool = false
         var lastPageBackgroundColor: NSColor = .clear
         var lastPageTextColor: NSColor = .clear
+        var lastContrastPolarity: MongrelContrastPolarity?
         var ignoredCompanionWords: Set<String> = []
+        private var stateReportGeneration = 0
+        private let editorUndoManager = UndoManager()
+        private var linkRenderingDelegate: ContrastLinkRenderingDelegate?
 
         init(_ parent: TextKit2EditorView) {
             self.parent = parent
         }
 
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            editorUndoManager
+        }
+
+        func resetDocumentEditingState(in textView: NSTextView) {
+            cancelPendingCodeHighlighting()
+            textView.breakUndoCoalescing()
+            textView.undoManager?.removeAllActions()
+            pendingInsertedRange = nil
+            ignoredCompanionWords.removeAll()
+            lastMode = parent.authoringMode
+            // NSTextView retains typing attributes when its storage becomes empty.
+            // A fresh tab must not inherit a heading font or another tab's element.
+            applyEditorMode(parent.authoringMode, to: textView, updatePublishedState: false)
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        func startObservingCompanionLexicon() {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(companionLexiconDidFinishLoading(_:)),
+                name: MongrelDictionaryCompanionLexicon.didFinishLoadingNotification,
+                object: parent.companionLexicon
+            )
+        }
+
+        @objc private func companionLexiconDidFinishLoading(_ notification: Notification) {
+            guard let textView else { return }
+            ignoredCompanionWords.removeAll()
+            applyCompanionSpellings(to: textView, fullDocument: true)
+        }
+
+        func scheduleStateReport(for textView: NSTextView) {
+            stateReportGeneration += 1
+            let generation = stateReportGeneration
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self,
+                      let textView,
+                      self.textView === textView,
+                      self.stateReportGeneration == generation else { return }
+                self.parent.bridge.updateFormattingState(from: textView)
+                if self.parent.authoringMode == .screenplay {
+                    self.reportScreenplayElement(self.parent.bridge.activeScreenplayElement)
+                    self.parent.onScreenplayCursorChange(textView.selectedRange().location)
+                    if self.paginationNeedsUpdate {
+                        self.scheduleScreenplayPagination(for: textView)
+                    } else if let editor = textView as? ScreenplayTextView {
+                        self.parent.onPaginationChange(editor.screenplayPageCount)
+                    }
+                } else if self.parent.authoringMode == .code {
+                    self.reportCodePosition(in: textView)
+                }
+            }
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             guard !isApplyingEdit else { return }
+            // Native completion can synchronously insert its preview and send a
+            // second didChangeText. Guard before calling AppKit, not afterwards.
+            isApplyingEdit = true
+            defer { isApplyingEdit = false }
 
             if parent.authoringMode == .code {
-                applyCodeHighlighting(to: textView)
-                if shouldTriggerCompletion(in: textView) {
+                if !textView.hasMarkedText(), textView.undoManager?.isUndoing != true,
+                   textView.undoManager?.isRedoing != true, shouldTriggerCompletion(in: textView) {
                     textView.complete(nil)
                 }
+                updateCodeHighlightingAfterEdit(in: textView)
                 reportCodePosition(in: textView)
             }
 
-            isApplyingEdit = true
             applyCompanionSpellings(to: textView)
             let activeElement: ScreenplayElement
-            if parent.authoringMode == .screenplay {
+            if parent.authoringMode == .screenplay, !textView.hasMarkedText(),
+               !parent.bridge.isApplyingExplicitFormatting,
+               textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true {
+                if let range = pendingInsertedRange, (textView as? ScreenplayTextView)?.isPastingNativeContent != true {
+                    parent.bridge.formatInsertedScreenplay(in: textView, range: range)
+                }
                 activeElement = parent.bridge.autoFormatScreenplay(in: textView)
             } else {
                 activeElement = parent.bridge.activeScreenplayElement
             }
-            parent.attributedText = textView.attributedString()
+            let refreshEntirePresentation = pendingInsertedRange != nil || parent.bridge.isApplyingExplicitFormatting
+                || textView.undoManager?.isUndoing == true || textView.undoManager?.isRedoing == true
+            pendingInsertedRange = nil
+            paginationNeedsUpdate = true
+            let snapshot = NSAttributedString(attributedString: textView.attributedString())
+            lastDocumentSnapshot = snapshot
+            parent.attributedText = snapshot
             parent.onEdit()
             parent.bridge.updateFormattingState(from: textView)
+            applyEditorPresentation(to: textView, refreshRendering: refreshEntirePresentation)
             if parent.authoringMode == .screenplay {
-                parent.onScreenplayElementChange(activeElement)
-                updateScreenplayPagination(for: textView)
+                reportScreenplayElement(activeElement)
+                parent.onScreenplayCursorChange(textView.selectedRange().location)
+                scheduleScreenplayPagination(for: textView)
             }
-            isApplyingEdit = false
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView else { return }
+            guard let textView, !isApplyingEdit else { return }
             parent.bridge.updateFormattingState(from: textView)
             if parent.authoringMode == .screenplay {
-                parent.onScreenplayElementChange(parent.bridge.activeScreenplayElement)
-                updateScreenplayPagination(for: textView)
+                reportScreenplayElement(parent.bridge.activeScreenplayElement)
+                parent.onScreenplayCursorChange(textView.selectedRange().location)
             }
             if parent.authoringMode == .code {
                 reportCodePosition(in: textView)
@@ -322,7 +576,11 @@ struct TextKit2EditorView: NSViewRepresentable {
             forPartialWordRange charRange: NSRange,
             indexOfSelectedItem index: UnsafeMutablePointer<Int>?
         ) -> [String] {
-            let prefix = (textView.string as NSString).substring(with: charRange).lowercased()
+            let source = textView.string as NSString
+            guard charRange.location != NSNotFound, charRange.location >= 0,
+                  charRange.length >= 0, charRange.location <= source.length,
+                  charRange.length <= source.length - charRange.location else { return [] }
+            let prefix = source.substring(with: charRange).lowercased()
             guard prefix.count >= 2 else { return words }
 
             if parent.authoringMode == .code {
@@ -345,6 +603,10 @@ struct TextKit2EditorView: NSViewRepresentable {
             shouldChangeTextIn affectedCharRange: NSRange,
             replacementString: String?
         ) -> Bool {
+            if let replacementString,
+               replacementString.utf16.count > 1, replacementString.contains(where: \.isNewline) {
+                pendingInsertedRange = NSRange(location: affectedCharRange.location, length: replacementString.utf16.count)
+            }
             guard parent.authoringMode == .code,
                   let replacementString,
                   (replacementString as NSString).length == 1,
@@ -397,17 +659,17 @@ struct TextKit2EditorView: NSViewRepresentable {
                 let nextElement = parent.bridge.nextScreenplayElementOnReturn(in: textView)
                 textView.insertText("\n", replacementRange: textView.selectedRange())
                 parent.bridge.configureTypingAttributes(for: nextElement, in: textView)
-                parent.onScreenplayElementChange(nextElement)
+                reportScreenplayElement(nextElement)
                 return true
             case #selector(NSResponder.insertTab(_:)):
                 let nextElement = parent.bridge.detectedScreenplayElement(in: textView).cycled(step: 1)
                 parent.bridge.applyScreenplayElement(nextElement, to: textView)
-                parent.onScreenplayElementChange(nextElement)
+                reportScreenplayElement(nextElement)
                 return true
             case #selector(NSResponder.insertBacktab(_:)):
                 let previousElement = parent.bridge.detectedScreenplayElement(in: textView).cycled(step: -1)
                 parent.bridge.applyScreenplayElement(previousElement, to: textView)
-                parent.onScreenplayElementChange(previousElement)
+                reportScreenplayElement(previousElement)
                 return true
             default:
                 return false
@@ -420,6 +682,11 @@ struct TextKit2EditorView: NSViewRepresentable {
             parent.onCodePositionChange(position.line, position.column, position.selectionLength)
         }
 
+        private func reportScreenplayElement(_ element: ScreenplayElement) {
+            guard parent.screenplayElement != element else { return }
+            parent.onScreenplayElementChange(element)
+        }
+
         private func applyCodeEdit(_ edit: CodeEditResult, to textView: NSTextView) {
             guard edit.text != textView.string else { return }
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
@@ -429,7 +696,12 @@ struct TextKit2EditorView: NSViewRepresentable {
             textView.didChangeText()
         }
 
-        func applyEditorMode(_ mode: AuthoringMode, to textView: NSTextView) {
+        func applyEditorMode(
+            _ mode: AuthoringMode,
+            to textView: NSTextView,
+            updatePublishedState: Bool = true
+        ) {
+            cancelPendingCodeHighlighting()
             switch mode {
             case .prose:
                 if let screenplayTextView = textView as? ScreenplayTextView {
@@ -481,7 +753,11 @@ struct TextKit2EditorView: NSViewRepresentable {
                 textView.drawsBackground = true
                 textView.backgroundColor = parent.pageBackgroundColor
                 applyScreenplayPageMetrics(to: textView)
-                parent.bridge.configureTypingAttributes(for: parent.screenplayElement, in: textView)
+                parent.bridge.configureTypingAttributes(
+                    for: parent.screenplayElement,
+                    in: textView,
+                    updatePublishedState: updatePublishedState
+                )
             }
             applyPagePalette(to: textView)
         }
@@ -497,6 +773,134 @@ struct TextKit2EditorView: NSViewRepresentable {
                 screenplayTextView.pageBackgroundColor = parent.pageBackgroundColor
                 screenplayTextView.pageTextColor = parent.pageTextColor
             }
+            applyEditorPresentation(to: textView)
+        }
+
+        /// Rendering attributes change the working surface without putting theme
+        /// colors into the document, clipboard, undo history, or exported pages.
+        func applyEditorPresentation(to textView: NSTextView, refreshRendering: Bool = true) {
+            let polarity = parent.contrastPolarity
+            let foreground = polarity?.foreground ?? parent.pageTextColor
+            let background = polarity?.background ?? parent.pageBackgroundColor
+            if let polarity {
+                textView.appearance = NSAppearance(named: polarity == .black ? .darkAqua : .aqua)
+                textView.drawsBackground = true
+                textView.backgroundColor = background
+                textView.insertionPointColor = foreground
+                textView.selectedTextAttributes = [.backgroundColor: foreground, .foregroundColor: background]
+                textView.linkTextAttributes = [.foregroundColor: foreground, .underlineStyle: NSUnderlineStyle.single.rawValue]
+                textView.enclosingScrollView?.scrollerKnobStyle = polarity == .black ? .light : .dark
+            } else {
+                textView.appearance = nil
+                textView.drawsBackground = parent.authoringMode != .code
+                textView.backgroundColor = background
+                let caret = parent.authoringMode == .code ? currentTheme().caret : foreground
+                textView.insertionPointColor = caret
+                textView.selectedTextAttributes = parent.authoringMode == .code
+                    ? [.backgroundColor: caret.withAlphaComponent(0.24), .foregroundColor: currentTheme().base]
+                    : [.backgroundColor: NSColor.selectedTextBackgroundColor, .foregroundColor: NSColor.selectedTextColor]
+                textView.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue]
+            }
+            if parent.authoringMode == .prose {
+                textView.textContainerInset = polarity == nil ? NSSize(width: 16, height: 16) : NSSize(width: 38, height: 34)
+            }
+            if let editor = textView as? ScreenplayTextView {
+                editor.pageBackgroundColor = background
+                editor.pageTextColor = foreground
+            }
+            if let manager = textView.textLayoutManager {
+                manager.renderingAttributesValidator = polarity == nil ? nil : { [weak self] manager, fragment in
+                    self?.applyContrastRendering(to: manager, range: fragment.rangeInElement)
+                }
+                if refreshRendering {
+                    linkRenderingDelegate = polarity.map { ContrastLinkRenderingDelegate(foreground: $0.foreground) }
+                    manager.delegate = linkRenderingDelegate
+                    manager.invalidateRenderingAttributes(for: manager.documentRange)
+                    if polarity != nil { applyContrastRendering(to: manager, range: manager.documentRange) }
+                } else if polarity != nil, let content = manager.textContentManager {
+                    // AppKit can replace the active paragraph's rendering attributes
+                    // after validating the other fragments during native typing/paste.
+                    // Repaint that paragraph without invalidating the whole document.
+                    let text = textView.string as NSString
+                    let selection = textView.selectedRange()
+                    let start = min(selection.location, text.length)
+                    let range = text.paragraphRange(for: NSRange(location: start, length: min(selection.length, text.length - start)))
+                    if range.length > 0,
+                       let begin = content.location(content.documentRange.location, offsetBy: range.location),
+                       let end = content.location(begin, offsetBy: range.length),
+                       let textRange = NSTextRange(location: begin, end: end) {
+                        applyContrastRendering(to: manager, range: textRange)
+                    }
+                }
+            } else if let manager = textView.layoutManager, let storage = textView.textStorage {
+                let range = NSRange(location: 0, length: storage.length)
+                manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+                manager.removeTemporaryAttribute(.font, forCharacterRange: range)
+                manager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+                manager.removeTemporaryAttribute(.underlineColor, forCharacterRange: range)
+                manager.removeTemporaryAttribute(.strikethroughColor, forCharacterRange: range)
+                if polarity != nil {
+                    for (run, attributes) in contrastRenderingRuns(in: range, storage: storage) {
+                        manager.addTemporaryAttributes(attributes, forCharacterRange: run)
+                    }
+                }
+            }
+            textView.needsDisplay = true
+        }
+
+        private func applyContrastRendering(to manager: NSTextLayoutManager, range: NSTextRange) {
+            guard parent.contrastPolarity != nil, let content = manager.textContentManager,
+                  let storage = textView?.textStorage else { return }
+            let start = content.offset(from: content.documentRange.location, to: range.location)
+            let end = content.offset(from: content.documentRange.location, to: range.endLocation)
+            guard start >= 0, end >= start, end <= storage.length else { return }
+            for (run, attributes) in contrastRenderingRuns(in: NSRange(location: start, length: end - start), storage: storage) {
+                guard let begin = content.location(content.documentRange.location, offsetBy: run.location),
+                      let finish = content.location(begin, offsetBy: run.length),
+                      let textRange = NSTextRange(location: begin, end: finish) else { continue }
+                manager.setRenderingAttributes(attributes, for: textRange)
+            }
+        }
+
+        private func contrastRenderingRuns(in range: NSRange, storage: NSTextStorage) -> [(NSRange, [NSAttributedString.Key: Any])] {
+            guard let polarity = parent.contrastPolarity else { return [] }
+            let foreground = polarity.foreground
+            let base: [NSAttributedString.Key: Any] = [
+                .foregroundColor: foreground,
+                .underlineColor: foreground,
+                .strikethroughColor: foreground
+            ]
+            if parent.authoringMode != .code {
+                var runs: [(NSRange, [NSAttributedString.Key: Any])] = []
+                storage.enumerateAttribute(.backgroundColor, in: range) { color, run, _ in
+                    var attributes = base
+                    // Retain visible highlighting while preventing imported yellow
+                    // or dark fills from defeating the monochrome text contrast.
+                    let highlighted = (color as? NSColor).map { $0.alphaComponent > 0 } ?? false
+                    attributes[.backgroundColor] = highlighted
+                        ? foreground.withAlphaComponent(polarity == .black ? 0.20 : 0.12) : NSColor.clear
+                    runs.append((run, attributes))
+                }
+                return runs
+            }
+            let theme = currentTheme()
+            var runs: [(NSRange, [NSAttributedString.Key: Any])] = []
+            storage.enumerateAttribute(.foregroundColor, in: range) { color, run, _ in
+                let color = color as? NSColor
+                var attributes = base
+                let gray: CGFloat?
+                if color == theme.comment {
+                    gray = polarity == .black ? 0.66 : 0.34
+                    attributes[.font] = NSFontManager.shared.convert(self.codeFont(weight: .regular), toHaveTrait: .italicFontMask)
+                } else if color == theme.string {
+                    gray = polarity == .black ? 0.84 : 0.16
+                } else if color == theme.number {
+                    gray = polarity == .black ? 0.92 : 0.08
+                } else { gray = nil }
+                if let gray { attributes[.foregroundColor] = NSColor(srgbRed: gray, green: gray, blue: gray, alpha: 1) }
+                runs.append((run, attributes))
+            }
+            return runs
         }
 
         func applyFormattingPrefs(useTabs: Bool, tabWidth: Int, to textView: NSTextView) {
@@ -540,6 +944,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             )
             textView.isHorizontallyResizable = false
             textView.isVerticallyResizable = true
+            textView.autoresizingMask = [.width]
             textView.textContainer?.widthTracksTextView = true
             textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
             textView.textContainer?.exclusionPaths = []
@@ -550,6 +955,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             textView.enclosingScrollView?.hasHorizontalScroller = false
             textView.minSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: 0)
             textView.maxSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: .greatestFiniteMagnitude)
+            textView.autoresizingMask = []
             textView.isHorizontallyResizable = false
             textView.isVerticallyResizable = true
             textView.textContainer?.widthTracksTextView = false
@@ -566,11 +972,29 @@ struct TextKit2EditorView: NSViewRepresentable {
             )
         }
 
-        func updateScreenplayPagination(for textView: NSTextView) {
-            guard parent.authoringMode == .screenplay else { return }
+        func scheduleScreenplayPagination(for textView: NSTextView) {
+            guard paginationNeedsUpdate else { return }
+            paginationWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self, weak textView] in
+                guard let self, let textView, self.textView === textView else { return }
+                self.updateScreenplayPagination(for: textView)
+            }
+            paginationWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+        }
 
-            let contentHeight = measuredScreenplayContentHeight(in: textView)
-            let requiredPages = ScreenplayPageLayout.pageCount(forLaidOutContentHeight: contentHeight)
+        func updateScreenplayPagination(for textView: NSTextView, reportChange: Bool = true) {
+            guard parent.authoringMode == .screenplay else { return }
+            paginationWorkItem?.cancel()
+            paginationNeedsUpdate = false
+
+            var contentHeight = measuredScreenplayContentHeight(in: textView)
+            var requiredPages = ScreenplayPageLayout.pageCount(forLaidOutContentHeight: contentHeight)
+            while let container = textView.textContainer, requiredPages >= container.exclusionPaths.count + 1 {
+                container.exclusionPaths = ScreenplayPageLayout.exclusionPaths(maximumPageCount: requiredPages + 100)
+                contentHeight = measuredScreenplayContentHeight(in: textView)
+                requiredPages = ScreenplayPageLayout.pageCount(forLaidOutContentHeight: contentHeight)
+            }
             let requiredHeight = CGFloat(requiredPages) * ScreenplayPageLayout.pageSize.height
             let visibleHeight = textView.enclosingScrollView?.documentVisibleRect.height
                 ?? ScreenplayPageLayout.pageSize.height
@@ -589,7 +1013,10 @@ struct TextKit2EditorView: NSViewRepresentable {
                 screenplayTextView.screenplayPageCount = requiredPages
             }
 
-            parent.onPaginationChange(requiredPages)
+            (textView as? ScreenplayTextView)?.refreshScreenplayOverlay()
+            if reportChange {
+                parent.onPaginationChange(requiredPages)
+            }
         }
 
         func updateMagnification(_ magnification: CGFloat, in scrollView: NSScrollView) {
@@ -664,10 +1091,10 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         private func shouldTriggerCompletion(in textView: NSTextView) -> Bool {
             let cursor = textView.selectedRange().location
-            guard cursor != NSNotFound, cursor > 1 else { return false }
             let text = textView.string as NSString
-            var start = cursor - 1
-            while start > 0 {
+            guard cursor != NSNotFound, cursor > 1, cursor <= text.length else { return false }
+            var start = cursor
+            while start > 0, cursor - start <= 128 {
                 let ch = text.character(at: start - 1)
                 let isAlphanumeric = UnicodeScalar(ch).map(CharacterSet.alphanumerics.contains) ?? false
                 if !(isAlphanumeric || ch == 95) {
@@ -676,7 +1103,14 @@ struct TextKit2EditorView: NSViewRepresentable {
                 start -= 1
             }
             let length = cursor - start
-            return length >= 2
+            guard length >= 2, length <= 128 else { return false }
+            let palette = currentTheme()
+            let color = textView.textStorage?.attribute(.foregroundColor, at: cursor - 1, effectiveRange: nil) as? NSColor
+            guard color != palette.comment, color != palette.string else { return false }
+            let prefix = text.substring(with: NSRange(location: start, length: length)).lowercased()
+            // Native completion consults the system spellchecker. Only ask for a
+            // useful keyword prefix, not every identifier, string, or comment.
+            return currentKeywords().contains { $0.count > prefix.count && $0.lowercased().hasPrefix(prefix) }
         }
 
         private func currentKeywords() -> [String] {
@@ -814,7 +1248,55 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
+        private func cancelPendingCodeHighlighting() {
+            codeHighlightWorkItem?.cancel()
+            codeHighlightWorkItem = nil
+        }
+
+        private func updateCodeHighlightingAfterEdit(in textView: NSTextView) {
+            cancelPendingCodeHighlighting()
+            guard (textView.textStorage?.length ?? 0) > 24_000 else {
+                applyCodeHighlighting(to: textView)
+                return
+            }
+            // Keep native typing immediate. One syntax pass follows a burst of edits;
+            // changing language, theme, mode, or document still refreshes immediately.
+            let documentID = parent.documentID
+            let work = DispatchWorkItem { [weak self, weak textView] in
+                guard let self, let textView, self.textView === textView,
+                      self.parent.documentID == documentID, self.parent.authoringMode == .code else { return }
+                self.flushPendingCodeHighlighting()
+            }
+            codeHighlightWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
+        }
+
+        func flushPendingCodeHighlighting() {
+            guard codeHighlightWorkItem != nil, parent.authoringMode == .code, let textView else { return }
+            applyCodeHighlighting(to: textView)
+            let snapshot = NSAttributedString(attributedString: textView.attributedString())
+            lastDocumentSnapshot = snapshot
+            parent.attributedText = snapshot
+        }
+
+        private func codeSyntaxExpression() -> NSRegularExpression? {
+            if let cached = codeSyntaxExpressions[parent.codeLanguage] { return cached }
+            let comments = commentPattern().isEmpty ? "(?!)" : commentPattern()
+            let strings = #""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`"#
+            let numbers = #"\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b"#
+            let keywords = currentKeywords().map(NSRegularExpression.escapedPattern(for:)).joined(separator: "|")
+            let words = keywords.isEmpty ? "(?!)" : "\\b(?:" + keywords + ")\\b"
+            let pattern = "(?<comment>" + comments + ")|(?<string>" + strings
+                + ")|(?<number>" + numbers + ")|(?<keyword>" + words + ")"
+            var options: NSRegularExpression.Options = [.anchorsMatchLines]
+            if parent.codeLanguage == .sql { options.insert(.caseInsensitive) }
+            let expression = try? NSRegularExpression(pattern: pattern, options: options)
+            codeSyntaxExpressions[parent.codeLanguage] = expression
+            return expression
+        }
+
         fileprivate func applyCodeHighlighting(to textView: NSTextView) {
+            cancelPendingCodeHighlighting()
             guard let storage = textView.textStorage else { return }
             let fullRange = NSRange(location: 0, length: storage.length)
 
@@ -834,7 +1316,10 @@ struct TextKit2EditorView: NSViewRepresentable {
                 .backgroundColor: palette.caret.withAlphaComponent(0.24),
                 .foregroundColor: palette.base
             ]
-            guard fullRange.length > 0 else { return }
+            guard fullRange.length > 0 else {
+                applyEditorPresentation(to: textView)
+                return
+            }
 
             storage.beginEditing()
             storage.setAttributes([
@@ -843,44 +1328,27 @@ struct TextKit2EditorView: NSViewRepresentable {
                 .paragraphStyle: paragraph
             ], range: fullRange)
 
-            let source = storage.string as NSString
-            let keywords = currentKeywords()
-            if !keywords.isEmpty {
-                let keywordPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
-                let options: NSRegularExpression.Options = parent.codeLanguage == .sql ? [.caseInsensitive] : []
-                if let regex = try? NSRegularExpression(pattern: keywordPattern, options: options) {
-                    regex.matches(in: source as String, range: fullRange).forEach { match in
-                        storage.addAttribute(.foregroundColor, value: palette.keyword, range: match.range)
-                        storage.addAttribute(.font, value: codeFont(weight: .semibold), range: match.range)
-                    }
+            let keywordFont = codeFont(weight: .semibold)
+            // A single lexical pass consumes strings and comments as complete tokens.
+            // Quotes inside comments and comment markers inside strings cannot leak.
+            codeSyntaxExpression()?.enumerateMatches(in: storage.string, range: fullRange) { match, _, _ in
+                guard let match else { return }
+                let color: NSColor
+                if match.range(withName: "comment").location != NSNotFound {
+                    color = palette.comment
+                } else if match.range(withName: "string").location != NSNotFound {
+                    color = palette.string
+                } else if match.range(withName: "number").location != NSNotFound {
+                    color = palette.number
+                } else {
+                    color = palette.keyword
+                    storage.addAttribute(.font, value: keywordFont, range: match.range)
                 }
-            }
-
-            if let numberRegex = try? NSRegularExpression(pattern: "\\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\\.[0-9]+)?)\\b") {
-                numberRegex.matches(in: source as String, range: fullRange).forEach { match in
-                    storage.addAttribute(.foregroundColor, value: palette.number, range: match.range)
-                }
-            }
-
-            let stringRegex = try? NSRegularExpression(
-                pattern: "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`"
-            )
-            let stringMatches = stringRegex?.matches(in: source as String, range: fullRange) ?? []
-            stringMatches.forEach { match in
-                storage.addAttribute(.foregroundColor, value: palette.string, range: match.range)
-            }
-
-            let commentPattern = commentPattern()
-            if !commentPattern.isEmpty,
-               let commentRegex = try? NSRegularExpression(pattern: commentPattern, options: [.anchorsMatchLines]) {
-                commentRegex.matches(in: source as String, range: fullRange).forEach { match in
-                    let startsInsideString = stringMatches.contains { NSLocationInRange(match.range.location, $0.range) }
-                    guard !startsInsideString else { return }
-                    storage.addAttribute(.foregroundColor, value: palette.comment, range: match.range)
-                }
+                storage.addAttribute(.foregroundColor, value: color, range: match.range)
             }
 
             storage.endEditing()
+            applyEditorPresentation(to: textView)
         }
 
         private func codeFont(weight: NSFont.Weight) -> NSFont {

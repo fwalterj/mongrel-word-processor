@@ -37,6 +37,7 @@ struct MongrelWordProcessorApp: App {
 
 private struct WordProcessorCommands: Commands {
     @ObservedObject var session: DocumentSession
+    @FocusedValue(\.wordProcessorFocusMode) private var focusMode
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -134,6 +135,14 @@ private struct WordProcessorCommands: Commands {
             .keyboardShortcut("p", modifiers: .command)
         }
 
+        CommandGroup(after: .sidebar) {
+            Button(focusMode?.wrappedValue == true ? "Exit Focus Mode" : "Enter Focus Mode") {
+                focusMode?.wrappedValue.toggle()
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(focusMode == nil)
+        }
+
         CommandMenu("Workspace") {
             Button("Next Tab") {
                 session.selectAdjacentTab(offset: 1)
@@ -216,6 +225,36 @@ private struct WordProcessorCommands: Commands {
             .keyboardShortcut("0", modifiers: .command)
         }
 
+        CommandMenu("Screenplay") {
+            Button("Previous Scene") {
+                session.selectAdjacentScene(offset: -1)
+            }
+            .keyboardShortcut(.upArrow, modifiers: .control)
+            .disabled(session.authoringMode != .screenplay || session.screenplayScenes.isEmpty)
+
+            Button("Next Scene") {
+                session.selectAdjacentScene(offset: 1)
+            }
+            .keyboardShortcut(.downArrow, modifiers: .control)
+            .disabled(session.authoringMode != .screenplay || session.screenplayScenes.isEmpty)
+
+            Divider()
+
+            Menu("Set Element") {
+                screenplayElementButton(.sceneHeading, shortcut: "1")
+                screenplayElementButton(.action, shortcut: "2")
+                screenplayElementButton(.character, shortcut: "3")
+                screenplayElementButton(.dialogue, shortcut: "4")
+                screenplayElementButton(.parenthetical, shortcut: "5")
+                screenplayElementButton(.transition, shortcut: "6")
+                screenplayElementButton(.shot, shortcut: "7")
+                screenplayElementButton(.insert, shortcut: "8")
+                screenplayElementButton(.titleCard, shortcut: "9")
+                screenplayElementButton(.timeJump, shortcut: "0")
+            }
+            .disabled(session.authoringMode != .screenplay)
+        }
+
         CommandMenu("Coding") {
             Button("Toggle Line Comment") {
                 session.toggleCodeComment()
@@ -251,5 +290,13 @@ private struct WordProcessorCommands: Commands {
                 session.exportAsWordDocument()
             }
         }
+    }
+
+    private func screenplayElementButton(_ element: ScreenplayElement, shortcut: KeyEquivalent) -> some View {
+        Button(element.title) {
+            session.screenplayElement = element
+            session.formattingBridge.applyScreenplayElement(element)
+        }
+        .keyboardShortcut(shortcut, modifiers: .control)
     }
 }

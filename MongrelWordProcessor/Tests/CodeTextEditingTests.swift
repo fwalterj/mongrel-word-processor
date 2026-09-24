@@ -3,6 +3,48 @@ import XCTest
 @testable import MongrelWordProcessor
 
 final class CodeTextEditingTests: XCTestCase {
+    func testReturnBeforeEmojiPreservesUnicodeAndSelection() {
+        for source in ["🙂", "let name = \"🙂\"", "{🙂}"] {
+            let location = (source as NSString).range(of: "🙂").location
+            let result = CodeTextEditing.insertNewline(in: source, selection: NSRange(location: location, length: 0), language: .swift, useTabs: false, tabWidth: 4)
+            XCTAssertTrue(result.text.contains("🙂"))
+            XCTAssertTrue(result.text.contains("\n"))
+            XCTAssertTrue(NSMaxRange(result.selection) <= result.text.utf16.count)
+        }
+    }
+
+    func testIndentedSelectionStaysWithinTheSelectedLines() {
+        let result = CodeTextEditing.indent("one\ntwo\nthree", selection: NSRange(location: 0, length: 8), useTabs: false, tabWidth: 2)
+        XCTAssertEqual(result.text, "  one\n  two\nthree")
+        XCTAssertEqual(result.selection, NSRange(location: 2, length: 10))
+        XCTAssertEqual((result.text as NSString).substring(with: result.selection), "one\n  two\n")
+        let whole = CodeTextEditing.indent("one\ntwo", selection: NSRange(location: 0, length: 7), useTabs: false, tabWidth: 2)
+        XCTAssertEqual(NSMaxRange(whole.selection), whole.text.utf16.count)
+    }
+
+    func testOutdentMapsPartialIndentAndMultilineSelectionExactly() {
+        let source = "    one\n    two"
+        let result = CodeTextEditing.outdent(source, selection: NSRange(location: 2, length: 8), tabWidth: 4)
+        XCTAssertEqual(result.text, "one\ntwo")
+        XCTAssertEqual(result.selection, NSRange(location: 0, length: 4))
+        let caret = CodeTextEditing.outdent(source, selection: NSRange(location: 2, length: 0), tabWidth: 4)
+        XCTAssertEqual(caret.selection, NSRange(location: 0, length: 0))
+    }
+
+    func testSourceEditingPreservesImportedLineEndings() {
+        for newline in ["\r\n", "\r", "\u{2028}"] {
+            let source = "first\(newline)second"
+            let result = CodeTextEditing.insertNewline(in: source, selection: NSRange(location: source.utf16.count, length: 0), language: .swift, useTabs: false, tabWidth: 4)
+            XCTAssertEqual(result.text, source + newline)
+            let duplicate = CodeTextEditing.duplicateLines(source, selection: NSRange(location: source.utf16.count, length: 0))
+            XCTAssertEqual(duplicate.text, source + newline + "second")
+            let position = CodeTextEditing.cursorPosition(in: source, selection: NSRange(location: source.utf16.count, length: 99))
+            XCTAssertEqual(position.line, 2)
+            XCTAssertEqual(position.column, 7)
+            XCTAssertEqual(position.selectionLength, 0)
+        }
+    }
+
     func testCursorPositionUsesUTF16OffsetsAndTracksSelection() {
         let text = "😀x\nabc"
         let location = ("😀x\na" as NSString).length

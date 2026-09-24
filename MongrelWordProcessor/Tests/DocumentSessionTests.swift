@@ -28,6 +28,15 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testCodeLineCountIncludesImportedWindowsAndUnicodeLineEndings() {
+        let session = makeSession()
+        for newline in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+            session.attributedText = NSAttributedString(string: "first\(newline)second\(newline)")
+            XCTAssertEqual(session.codeLineCount, 3, newline.debugDescription)
+        }
+    }
+
+    @MainActor
     func testFreshDocumentCanBeSaved() {
         let session = makeSession()
 
@@ -63,6 +72,65 @@ final class DocumentSessionTests: XCTestCase {
             reopened.attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         )
         assertColor(reopenedColor, matches: .labelColor)
+    }
+
+    @MainActor
+    func testSaveRefusesToOverwriteExternallyChangedBackingFile() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Shared Draft.txt")
+        try "Version from disk".write(to: destination, atomically: true, encoding: .utf8)
+        var presentedErrors: [(String, String)] = []
+        let session = makeSession { message, details in
+            presentedErrors.append((message, details))
+        }
+        XCTAssertTrue(session.openDocument(at: destination))
+
+        try "External revision".write(to: destination, atomically: true, encoding: .utf8)
+        session.attributedText = NSAttributedString(string: "Local unsaved revision")
+        session.markDirty()
+
+        XCTAssertFalse(session.saveDocument(to: destination, type: .plainText))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "External revision")
+        XCTAssertEqual(session.attributedText.string, "Local unsaved revision")
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertEqual(presentedErrors.last?.0, "File Changed on Disk")
+    }
+
+    @MainActor
+    func testSaveAsPreservesBothVersionsAfterExternalChange() throws {
+        let original = temporaryDirectory.appendingPathComponent("Shared Draft.txt")
+        let preservedCopy = temporaryDirectory.appendingPathComponent("Shared Draft Local.txt")
+        try "Version from disk".write(to: original, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: original))
+
+        try "External revision".write(to: original, atomically: true, encoding: .utf8)
+        session.attributedText = NSAttributedString(string: "Local unsaved revision")
+        session.markDirty()
+
+        XCTAssertTrue(session.saveDocument(to: preservedCopy, type: .plainText))
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "External revision")
+        XCTAssertEqual(try String(contentsOf: preservedCopy, encoding: .utf8), "Local unsaved revision")
+        XCTAssertEqual(session.currentURL, preservedCopy)
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testSaveCopyCannotReplaceActiveBackingFile() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Current Draft.txt")
+        try "Current contents".write(to: destination, atomically: true, encoding: .utf8)
+        var presentedErrors: [(String, String)] = []
+        let session = makeSession { message, details in
+            presentedErrors.append((message, details))
+        }
+        XCTAssertTrue(session.openDocument(at: destination))
+
+        session.attributedText = NSAttributedString(string: "Untracked copy contents")
+        session.markDirty()
+
+        XCTAssertFalse(session.saveDocumentCopy(to: destination, type: .plainText))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "Current contents")
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertEqual(presentedErrors.last?.0, "Choose a Different Filename")
     }
 
     @MainActor
@@ -341,6 +409,38 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testAutosaveOnTabSwitchPreservesDraftWhenBackingFileChangedExternally() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Autosave Conflict.txt")
+        var presentedErrors: [(String, String)] = []
+        let session = makeSession { message, details in
+            presentedErrors.append((message, details))
+        }
+        session.attributedText = NSAttributedString(string: "Saved baseline")
+        XCTAssertTrue(session.saveDocument(to: destination, type: .plainText))
+        let sourceID = try XCTUnwrap(session.activeTabID)
+
+        session.attributedText = NSAttributedString(string: "Local unsaved continuation")
+        session.markDirty()
+        session.autosaveOnTabSwitch = true
+        try "External edit that must survive".write(to: destination, atomically: true, encoding: .utf8)
+
+        session.newScreenplay()
+
+        XCTAssertEqual(
+            try String(contentsOf: destination, encoding: .utf8),
+            "External edit that must survive"
+        )
+        let sourceTab = try XCTUnwrap(session.workspaceTabs.first(where: { $0.id == sourceID }))
+        XCTAssertTrue(sourceTab.isDirty)
+        XCTAssertEqual(presentedErrors.first?.0, "File Changed on Disk")
+
+        session.switchToTab(sourceID)
+        XCTAssertEqual(session.attributedText.string, "Local unsaved continuation")
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertEqual(session.currentURL, destination)
+    }
+
+    @MainActor
     func testUntitledDirtyTabSurvivesSwitchWithoutForcingSavePanel() throws {
         let session = makeSession()
         session.autosaveOnTabSwitch = true
@@ -392,6 +492,74 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(session.activeTabID, sourceID)
         XCTAssertEqual(session.workspaceTabs.count, 2)
         XCTAssertEqual(session.authoringMode, .code)
+    }
+
+    @MainActor
+    func testReopeningActiveCleanFileReloadsExternalChanges() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Active Refresh.txt")
+        try "Original contents".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+
+        try "Updated outside the app".write(to: destination, atomically: true, encoding: .utf8)
+        XCTAssertTrue(session.openDocument(at: destination))
+
+        XCTAssertEqual(session.workspaceTabs.count, 1)
+        XCTAssertEqual(session.attributedText.string, "Updated outside the app")
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testReopeningActiveDirtyFileKeepsLocalDraft() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Active Dirty.txt")
+        try "Original contents".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        session.attributedText = NSAttributedString(string: "Local unfinished draft")
+        session.markDirty()
+
+        try "External version".write(to: destination, atomically: true, encoding: .utf8)
+        XCTAssertTrue(session.openDocument(at: destination))
+
+        XCTAssertEqual(session.workspaceTabs.count, 1)
+        XCTAssertEqual(session.attributedText.string, "Local unfinished draft")
+        XCTAssertTrue(session.hasUnsavedChanges)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "External version")
+    }
+
+    @MainActor
+    func testSwitchingToCleanTabReloadsExternalDiskChanges() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Background.txt")
+        try "Original disk contents".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        let fileTabID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+
+        try "Updated outside Mongrel".write(to: destination, atomically: true, encoding: .utf8)
+        session.switchToTab(fileTabID)
+
+        XCTAssertEqual(session.attributedText.string, "Updated outside Mongrel")
+        XCTAssertEqual(session.currentURL, destination)
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testSwitchingToDeletedCleanTabPreservesARecoveredCopy() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Deleted Background.txt")
+        try "Contents worth retaining".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        let fileTabID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+
+        try FileManager.default.removeItem(at: destination)
+        session.switchToTab(fileTabID)
+
+        XCTAssertEqual(session.attributedText.string, "Contents worth retaining")
+        XCTAssertEqual(session.title, "Deleted Background (Recovered)")
+        XCTAssertNil(session.currentURL)
+        XCTAssertTrue(session.hasUnsavedChanges)
     }
 
     @MainActor
@@ -467,6 +635,43 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(session.authoringMode, .screenplay)
         XCTAssertFalse(session.workspaceTabs.contains(where: { $0.id == backgroundID }))
         XCTAssertTrue(session.canReopenClosedTab)
+    }
+
+    @MainActor
+    func testReopeningCleanClosedTabReloadsItsLatestDiskVersion() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Closed Reference.txt")
+        try "Original reference".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        let referenceID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+        session.closeTab(referenceID)
+
+        try "Externally revised reference".write(to: destination, atomically: true, encoding: .utf8)
+        session.reopenClosedTab()
+
+        XCTAssertEqual(session.attributedText.string, "Externally revised reference")
+        XCTAssertEqual(session.currentURL, destination)
+        XCTAssertFalse(session.hasUnsavedChanges)
+    }
+
+    @MainActor
+    func testReopeningDeletedCleanTabRetainsDetachedRecovery() throws {
+        let destination = temporaryDirectory.appendingPathComponent("Closed Then Deleted.txt")
+        try "Archived reference".write(to: destination, atomically: true, encoding: .utf8)
+        let session = makeSession()
+        XCTAssertTrue(session.openDocument(at: destination))
+        let referenceID = try XCTUnwrap(session.activeTabID)
+        session.newScreenplay()
+        session.closeTab(referenceID)
+
+        try FileManager.default.removeItem(at: destination)
+        session.reopenClosedTab()
+
+        XCTAssertEqual(session.attributedText.string, "Archived reference")
+        XCTAssertEqual(session.title, "Closed Then Deleted (Recovered)")
+        XCTAssertNil(session.currentURL)
+        XCTAssertTrue(session.hasUnsavedChanges)
     }
 
     @MainActor
@@ -589,6 +794,39 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceRecoveryStillReadsVersionOneManifestWithoutFileIdentityFields() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("LegacyRecovery", isDirectory: true)
+        let destination = temporaryDirectory.appendingPathComponent("LegacyRecovery.txt")
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Legacy recovery contents")
+        XCTAssertTrue(try XCTUnwrap(session).saveDocument(to: destination, type: .plainText))
+        session?.flushWorkspaceRecovery()
+        session = nil
+
+        let manifestURL = recoveryDirectory.appendingPathComponent("WorkspaceRecovery.json")
+        let manifestData = try Data(contentsOf: manifestURL)
+        var manifest = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
+        )
+        var tabs = try XCTUnwrap(manifest["tabs"] as? [[String: Any]])
+        for index in tabs.indices {
+            tabs[index].removeValue(forKey: "fileNumber")
+            tabs[index].removeValue(forKey: "systemNumber")
+        }
+        manifest["tabs"] = tabs
+        try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL, options: .atomic)
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.attributedText.string, "Legacy recovery contents")
+        XCTAssertEqual(
+            restored.currentURL?.standardizedFileURL.resolvingSymlinksInPath(),
+            destination.standardizedFileURL.resolvingSymlinksInPath()
+        )
+        XCTAssertFalse(restored.hasUnsavedChanges)
+    }
+
+    @MainActor
     func testWorkspaceRecoveryPreservesDirtyNamedDraftOverChangedDiskFile() throws {
         let recoveryDirectory = temporaryDirectory.appendingPathComponent("DirtyNamedRecovery", isDirectory: true)
         let destination = temporaryDirectory.appendingPathComponent("ConflictedDraft.txt")
@@ -608,6 +846,32 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(restored.title, "ConflictedDraft (Recovered Conflict)")
         XCTAssertNil(restored.currentURL)
         XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "External disk version")
+    }
+
+    @MainActor
+    func testWorkspaceRecoveryKeepsOriginalDiskBaselineWhenExternalChangePrecedesSnapshot() throws {
+        let recoveryDirectory = temporaryDirectory.appendingPathComponent("DirtyBaselineRecovery", isDirectory: true)
+        let destination = temporaryDirectory.appendingPathComponent("BaselineConflict.txt")
+        var session: DocumentSession? = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+        session?.attributedText = NSAttributedString(string: "Saved baseline")
+        XCTAssertTrue(try XCTUnwrap(session).saveDocument(to: destination, type: .plainText))
+        session?.attributedText = NSAttributedString(string: "Local unsaved continuation")
+        session?.markDirty()
+
+        try "External edit before recovery flush".write(to: destination, atomically: true, encoding: .utf8)
+        session?.flushWorkspaceRecovery()
+        session = nil
+
+        let restored = makeSession(workspaceRecoveryDirectory: recoveryDirectory)
+
+        XCTAssertEqual(restored.attributedText.string, "Local unsaved continuation")
+        XCTAssertEqual(restored.title, "BaselineConflict (Recovered Conflict)")
+        XCTAssertNil(restored.currentURL)
+        XCTAssertTrue(restored.hasUnsavedChanges)
+        XCTAssertEqual(
+            try String(contentsOf: destination, encoding: .utf8),
+            "External edit before recovery flush"
+        )
     }
 
     @MainActor
@@ -671,6 +935,113 @@ final class DocumentSessionTests: XCTestCase {
         )
         XCTAssertFalse(recoveryFiles.contains(where: { $0.lastPathComponent == "WorkspaceRecovery.json" }))
         XCTAssertTrue(recoveryFiles.contains(where: { $0.lastPathComponent.hasPrefix("WorkspaceRecovery-corrupt-") }))
+    }
+
+    @MainActor
+    func testRecoveryDetachesCleanDraftWhenItsBackingFileBecameUnreadable() throws {
+        let recovery = temporaryDirectory.appendingPathComponent("UnreadableRecovery")
+        let destination = temporaryDirectory.appendingPathComponent("Draft.mongreldoc")
+        var source: DocumentSession? = makeSession(workspaceRecoveryDirectory: recovery)
+        source?.attributedText = NSAttributedString(string: "The recoverable draft.")
+        source?.markDirty()
+        XCTAssertTrue(source!.saveDocument(to: destination, type: .mongrelDocument))
+        source?.flushWorkspaceRecovery()
+        source = nil
+        try Data("broken document".utf8).write(to: destination)
+        let restored = makeSession(workspaceRecoveryDirectory: recovery)
+        XCTAssertEqual(restored.attributedText.string, "The recoverable draft.")
+        XCTAssertNil(restored.currentURL)
+        XCTAssertTrue(restored.hasUnsavedChanges)
+        XCTAssertTrue(restored.title.contains("Recovered"))
+        XCTAssertEqual(try String(contentsOf: destination), "broken document")
+    }
+
+    @MainActor
+    func testRecoveryGivesDuplicateTabIdentifiersIndependentOwnership() throws {
+        let recovery = temporaryDirectory.appendingPathComponent("DuplicateIDRecovery")
+        var source: DocumentSession? = makeSession(workspaceRecoveryDirectory: recovery)
+        source?.attributedText = NSAttributedString(string: "First recoverable draft")
+        source?.markDirty()
+        source?.newDocument()
+        source?.attributedText = NSAttributedString(string: "Second recoverable draft")
+        source?.markDirty()
+        source?.flushWorkspaceRecovery()
+        source = nil
+        let url = recovery.appendingPathComponent("WorkspaceRecovery.json")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var tabs = try XCTUnwrap(json["tabs"] as? [[String: Any]])
+        tabs[1]["id"] = tabs[0]["id"]
+        json["tabs"] = tabs
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+        let restored = makeSession(workspaceRecoveryDirectory: recovery)
+        XCTAssertEqual(restored.workspaceTabs.count, 2)
+        XCTAssertEqual(Set(restored.workspaceTabs.map(\.id)).count, 2)
+        var contents = Set<String>()
+        for tab in restored.workspaceTabs {
+            restored.switchToTab(tab.id)
+            contents.insert(restored.attributedText.string)
+        }
+        XCTAssertEqual(contents, ["First recoverable draft", "Second recoverable draft"])
+    }
+
+    @MainActor
+    func testSeededMixedDocumentLifecyclePreservesEveryDraft() throws {
+        let recovery = temporaryDirectory.appendingPathComponent("LifecycleStress")
+        let session = makeSession(workspaceRecoveryDirectory: recovery)
+        var expected = [session.activeTabID!: ""]
+        var seed: UInt64 = 0x4D4F4E4752454C
+        var exercised = Set<Int>()
+        for step in 0..<240 {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1
+            let operation = Int((seed >> 32) % 8)
+            exercised.insert(operation)
+            switch operation {
+            case 0:
+                if step.isMultiple(of: 2) { session.newScreenplay() } else { session.newDocument() }
+                expected[session.activeTabID!] = ""
+            case 1:
+                let value = "INT. ROOM \(step) - NIGHT\nCafé 👩🏽‍💻 — Straße.\r\n" + String(repeating: "A quiet line.\n", count: step % 31)
+                session.attributedText = NSAttributedString(string: value)
+                // Switch/save/recover before deferred analysis has an opportunity to run.
+                session.markDirty(deferMetrics: true)
+                expected[session.activeTabID!] = value
+            case 2:
+                let tabs = session.workspaceTabs
+                session.switchToTab(tabs[Int(seed % UInt64(tabs.count))].id)
+            case 3:
+                let contents = expected[session.activeTabID!]
+                session.duplicateTab(session.activeTabID!)
+                expected[session.activeTabID!] = contents
+            case 4, 5:
+                let destination = temporaryDirectory.appendingPathComponent("Stress-\(session.activeTabID!).mongreldoc")
+                XCTAssertTrue(session.saveDocument(to: destination, type: .mongrelDocument))
+                if operation == 5 { XCTAssertTrue(session.openDocument(at: destination)) }
+            case 6:
+                if let clean = session.workspaceTabs.first(where: { !$0.isDirty }), session.workspaceTabs.count > 1 {
+                    session.closeTab(clean.id)
+                    expected.removeValue(forKey: clean.id)
+                }
+            default:
+                if session.authoringMode == .screenplay { session.screenplaySettings.draft = .production }
+            }
+            XCTAssertEqual(session.attributedText.string, expected[session.activeTabID!], "Step \(step)")
+            XCTAssertEqual(Set(session.workspaceTabs.map(\.id)), Set(expected.keys))
+            if step.isMultiple(of: 24) {
+                session.flushWorkspaceRecovery()
+                let restored = makeSession(workspaceRecoveryDirectory: recovery)
+                // A single pristine empty tab deliberately has no recovery file.
+                if expected.count > 1 || session.hasUnsavedChanges || session.currentURL != nil {
+                    XCTAssertEqual(restored.activeTabID, session.activeTabID)
+                    XCTAssertEqual(Set(restored.workspaceTabs.map(\.id)), Set(expected.keys))
+                    for tab in restored.workspaceTabs {
+                        restored.switchToTab(tab.id)
+                        XCTAssertEqual(restored.attributedText.string, expected[tab.id], "Recovered at step \(step)")
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(exercised.count, 8)
+        session.flushWorkspaceRecovery()
     }
 
     @MainActor
@@ -840,6 +1211,48 @@ final class DocumentSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeFormatsPreserveTrimmedProjectTitles() throws {
+        let documentURL = temporaryDirectory.appendingPathComponent("Container Name.mongreldoc")
+        let document = makeSession()
+        document.title = "  Working Novel Title  "
+        document.attributedText = NSAttributedString(string: "Chapter one")
+        XCTAssertTrue(document.saveDocument(to: documentURL, type: .mongrelDocument))
+        XCTAssertEqual(document.title, "Working Novel Title")
+
+        let reopenedDocument = makeSession()
+        XCTAssertTrue(reopenedDocument.openDocument(at: documentURL))
+        XCTAssertEqual(reopenedDocument.title, "Working Novel Title")
+
+        let screenplayURL = temporaryDirectory.appendingPathComponent("Container Name.mgscreenplay")
+        let screenplay = makeSession()
+        screenplay.newScreenplay()
+        screenplay.title = "  Glassline  "
+        screenplay.attributedText = NSAttributedString(string: "INT. STUDIO - NIGHT\n")
+        XCTAssertTrue(screenplay.saveDocument(to: screenplayURL, type: .mongrelScreenplay))
+        XCTAssertEqual(screenplay.title, "Glassline")
+
+        let reopenedScreenplay = makeSession()
+        XCTAssertTrue(reopenedScreenplay.openDocument(at: screenplayURL))
+        XCTAssertEqual(reopenedScreenplay.title, "Glassline")
+        XCTAssertEqual(reopenedScreenplay.authoringMode, .screenplay)
+    }
+
+    @MainActor
+    func testNativeFirstSaveReplacesPlaceholderTitleWithFilename() throws {
+        let screenplayURL = temporaryDirectory.appendingPathComponent("Night Signal.mgscreenplay")
+        let screenplay = makeSession()
+        screenplay.newScreenplay()
+        XCTAssertTrue(screenplay.saveDocument(to: screenplayURL, type: .mongrelScreenplay))
+        XCTAssertEqual(screenplay.title, "Night Signal")
+
+        let codeURL = temporaryDirectory.appendingPathComponent("Parser Notes.mongreldoc")
+        let code = makeSession()
+        code.newCodeDocument()
+        XCTAssertTrue(code.saveDocument(to: codeURL, type: .mongrelDocument))
+        XCTAssertEqual(code.title, "Parser Notes")
+    }
+
+    @MainActor
     func testNativeCodeDocumentRoundTripPreservesLanguage() throws {
         let source = makeSession()
         source.newCodeDocument()
@@ -936,6 +1349,49 @@ final class DocumentSessionTests: XCTestCase {
 
         XCTAssertEqual(session.screenplaySceneCount, 1)
         XCTAssertEqual(session.screenplayScenes.first?.heading, "INT. KITCHEN - DAY")
+    }
+
+    @MainActor
+    func testAdjacentSceneNavigationMovesBothDirectionsAndWraps() throws {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        session.attributedText = NSAttributedString(
+            string: "INT. KITCHEN - DAY\nAction.\nEXT. STREET - NIGHT\nMore action.\nINT. CAR - DAWN\n"
+        )
+        session.markDirty()
+        let scenes = session.screenplayScenes
+        XCTAssertEqual(scenes.count, 3)
+
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        textView.textStorage?.setAttributedString(session.attributedText)
+        session.formattingBridge.textView = textView
+        textView.setSelectedRange(NSRange(location: scenes[0].location, length: 0))
+
+        session.selectAdjacentScene(offset: 1)
+        XCTAssertEqual(textView.selectedRange().location, scenes[1].location)
+
+        session.selectAdjacentScene(offset: -1)
+        XCTAssertEqual(textView.selectedRange().location, scenes[0].location)
+
+        session.selectAdjacentScene(offset: -1)
+        XCTAssertEqual(textView.selectedRange().location, scenes[2].location)
+        XCTAssertEqual(session.screenplayElement, .sceneHeading)
+    }
+
+    @MainActor
+    func testSceneFilteringSupportsTermsAndSceneNumbers() {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        session.attributedText = NSAttributedString(
+            string: "INT. KITCHEN - DAY\nAction.\nEXT. CITY STREET - NIGHT\nAction.\nINT. CAR - NIGHT\n"
+        )
+        session.markDirty()
+
+        XCTAssertEqual(session.screenplayScenes(matching: "night").map(\.number), [2, 3])
+        XCTAssertEqual(session.screenplayScenes(matching: "city night").map(\.number), [2])
+        XCTAssertEqual(session.screenplayScenes(matching: "#3").map(\.heading), ["INT. CAR - NIGHT"])
+        XCTAssertEqual(session.screenplayScenes(matching: "  ").count, 3)
+        XCTAssertTrue(session.screenplayScenes(matching: "warehouse").isEmpty)
     }
 
     @MainActor

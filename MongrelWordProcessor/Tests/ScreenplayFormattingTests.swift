@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 @testable import MongrelWordProcessor
 
@@ -196,7 +197,83 @@ final class ScreenplayFormattingTests: XCTestCase {
         bridge.configureTypingAttributes(for: .character, in: textView)
         let labels = Set(bridge.screenplaySuggestions.map(\.label))
 
-        XCTAssertTrue(labels.isSuperset(of: ["MARA", "DAVID", "O.S.", "V.O."]))
+        XCTAssertTrue(labels.isSuperset(of: ["MARA", "DAVID", "O.S.", "V.O.", "CONT'D"]))
+    }
+
+    func testCharacterSuggestionsDoNotStackCueExtensions() throws {
+        let bridge = FormattingBridge()
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 500))
+        textView.string = "MARA (V.O.)"
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+
+        bridge.configureTypingAttributes(for: .character, in: textView)
+
+        let voiceOver = try XCTUnwrap(bridge.screenplaySuggestions.first(where: { $0.label == "V.O." }))
+        let offScreen = try XCTUnwrap(bridge.screenplaySuggestions.first(where: { $0.label == "O.S." }))
+        let continued = try XCTUnwrap(bridge.screenplaySuggestions.first(where: { $0.label == "CONT'D" }))
+        XCTAssertEqual(voiceOver.text, "MARA (V.O.)")
+        XCTAssertEqual(offScreen.text, "MARA (O.S.)")
+        XCTAssertEqual(continued.text, "MARA (CONT'D)")
+    }
+
+    func testFormattingStateDoesNotRepublishUnchangedValues() {
+        let (bridge, textView) = makeEditor("Quiet action.")
+        bridge.updateFormattingState(from: textView)
+        var updateCount = 0
+        let subscription = bridge.objectWillChange.sink { updateCount += 1 }
+
+        bridge.updateFormattingState(from: textView)
+
+        XCTAssertEqual(updateCount, 0)
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testTypingAttributesCanBeConfiguredWithoutPublishingDuringViewUpdate() {
+        let (bridge, textView) = makeEditor("")
+        var updateCount = 0
+        let subscription = bridge.objectWillChange.sink { updateCount += 1 }
+
+        bridge.configureTypingAttributes(
+            for: .sceneHeading,
+            in: textView,
+            updatePublishedState: false
+        )
+
+        XCTAssertEqual(updateCount, 0)
+        XCTAssertEqual(
+            textView.typingAttributes[.screenplayElement] as? String,
+            ScreenplayElement.sceneHeading.rawValue
+        )
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testCompanionSuggestionsRejectNonpositiveLimits() {
+        let lexicon = MongrelDictionaryCompanionLexicon(headwords: ["screenplay", "screenwriter"])
+
+        XCTAssertEqual(lexicon.suggestions(for: "screen", limit: 0), [])
+        XCTAssertEqual(lexicon.suggestions(for: "screen", limit: -1), [])
+    }
+
+    func testCompanionSuggestionsFindBoundedSingleEditCorrections() {
+        let lexicon = MongrelDictionaryCompanionLexicon(
+            headwords: ["screenplay", "screenwriter", "the", "writer"]
+        )
+
+        XCTAssertTrue(lexicon.suggestions(for: "sscreenplay").contains("screenplay"))
+        XCTAssertTrue(lexicon.suggestions(for: "creenplay").contains("screenplay"))
+        XCTAssertTrue(lexicon.suggestions(for: "xcreenplay").contains("screenplay"))
+        XCTAssertTrue(lexicon.suggestions(for: "teh").contains("the"))
+    }
+
+    func testCompanionSuggestionsPreferTruePrefixCompletions() {
+        let lexicon = MongrelDictionaryCompanionLexicon(
+            headwords: ["scream", "screenplay", "screenwriter"]
+        )
+
+        XCTAssertEqual(
+            lexicon.suggestions(for: "screenw", limit: 2).first,
+            "screenwriter"
+        )
     }
 
     private func makeEditor(_ text: String) -> (FormattingBridge, NSTextView) {

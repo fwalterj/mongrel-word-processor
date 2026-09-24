@@ -39,3 +39,6 @@ userChrome-glass.css
 
 # Raw captures are curated into MongrelWordProcessor/Screenshots before commit
 /Screenshot *.png
+
+# Optional local screenplay research corpus, never distributed with the app
+/screenplay_examples/

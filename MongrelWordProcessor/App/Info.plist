@@ -8,6 +8,8 @@
   <string>$(EXECUTABLE_NAME)</string>
   <key>CFBundleDisplayName</key>
   <string>Mongrel Word Processor</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -61,7 +63,7 @@
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
-      <string>Owner</string>
+      <string>Alternate</string>
       <key>LSItemContentTypes</key>
 	      <array>
 	        <string>public.rtf</string>

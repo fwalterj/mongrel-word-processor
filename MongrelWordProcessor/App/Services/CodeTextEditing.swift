@@ -8,15 +8,20 @@ struct CodeEditResult: Equatable {
 enum CodeTextEditing {
     static func cursorPosition(in text: String, selection: NSRange) -> (line: Int, column: Int, selectionLength: Int) {
         let source = text as NSString
-        let location = min(max(0, selection.location), source.length)
-        let prefix = source.substring(to: location) as NSString
+        let selection = clamped(selection, to: source.length)
+        let location = selection.location
         var line = 1
         var lineStart = 0
-        for index in 0..<prefix.length where prefix.character(at: index) == 10 {
-            line += 1
-            lineStart = index + 1
+        for index in 0..<location {
+            let character = source.character(at: index)
+            if character == 13 || character == 10 || character == 0x2028 || character == 0x2029 {
+                if character != 10 || index == 0 || source.character(at: index - 1) != 13 {
+                    line += 1
+                }
+                lineStart = index + 1
+            }
         }
-        return (line, location - lineStart + 1, max(0, selection.length))
+        return (line, location - lineStart + 1, selection.length)
     }
 
     static func insertNewline(
@@ -38,19 +43,22 @@ enum CodeTextEditing {
         let trimmed = beforeCaret.trimmingCharacters(in: .whitespaces)
         let unit = indentationUnit(useTabs: useTabs, tabWidth: tabWidth)
         let increasesIndent = shouldIncreaseIndent(after: trimmed, language: language)
-        let nextCharacter = safeSelection.location < source.length
-            ? String(UnicodeScalar(source.character(at: safeSelection.location))!)
+        let nextLocation = NSMaxRange(safeSelection)
+        // A UTF-16 code unit may be half of an emoji, not a Unicode scalar.
+        let nextCharacter = nextLocation < source.length
+            ? UnicodeScalar(source.character(at: nextLocation)).map(String.init) ?? ""
             : ""
         let matchingClose = matchingClosingDelimiter(for: trimmed.last)
+        let newline = preferredLineEnding(in: source)
 
         let insertion: String
         let caretOffset: Int
         if increasesIndent, !matchingClose.isEmpty, matchingClose == nextCharacter {
             let inner = baseIndent + unit
-            insertion = "\n\(inner)\n\(baseIndent)"
-            caretOffset = ("\n\(inner)" as NSString).length
+            insertion = "\(newline)\(inner)\(newline)\(baseIndent)"
+            caretOffset = ("\(newline)\(inner)" as NSString).length
         } else {
-            insertion = "\n\(baseIndent)\(increasesIndent ? unit : "")"
+            insertion = "\(newline)\(baseIndent)\(increasesIndent ? unit : "")"
             caretOffset = (insertion as NSString).length
         }
 
@@ -91,7 +99,7 @@ enum CodeTextEditing {
             text: mutable as String,
             selection: NSRange(
                 location: safeSelection.location + unitLength,
-                length: safeSelection.length + (unitLength * starts.count)
+                length: safeSelection.length + (unitLength * max(0, starts.count - 1))
             )
         )
     }
@@ -121,15 +129,16 @@ enum CodeTextEditing {
         for removal in removals.reversed() {
             mutable.deleteCharacters(in: NSRange(location: removal.location, length: removal.length))
         }
-        let removedBeforeStart = removals
-            .filter { $0.location < safeSelection.location }
-            .reduce(0) { $0 + $1.length }
-        let totalRemoved = removals.reduce(0) { $0 + $1.length }
+        func mappedPosition(_ position: Int) -> Int {
+            position - removals.reduce(0) { $0 + min($1.length, max(0, position - $1.location)) }
+        }
+        let start = mappedPosition(safeSelection.location)
+        let end = mappedPosition(NSMaxRange(safeSelection))
         return CodeEditResult(
             text: mutable as String,
             selection: NSRange(
-                location: max(range.location, safeSelection.location - removedBeforeStart),
-                length: max(0, safeSelection.length - max(0, totalRemoved - removedBeforeStart))
+                location: start,
+                length: end - start
             )
         )
     }
@@ -227,9 +236,9 @@ enum CodeTextEditing {
         let source = text as NSString
         let safeSelection = clamped(selection, to: source.length)
         let range = selectedLineRange(in: source, selection: safeSelection)
-        var block = source.substring(with: range)
-        let separator = block.hasSuffix("\n") || range.location + range.length == source.length && source.length == 0 ? "" : "\n"
-        if !block.hasSuffix("\n"), range.location + range.length < source.length { block += "\n" }
+        let block = source.substring(with: range)
+        let endsWithNewline = block.last?.isNewline == true
+        let separator = endsWithNewline || source.length == 0 ? "" : preferredLineEnding(in: source)
         let insertion = separator + block
         let mutable = NSMutableString(string: text)
         mutable.insert(insertion, at: NSMaxRange(range))
@@ -248,6 +257,16 @@ enum CodeTextEditing {
 
     private static func indentationUnit(useTabs: Bool, tabWidth: Int) -> String {
         useTabs ? "\t" : String(repeating: " ", count: max(1, tabWidth))
+    }
+
+    private static func preferredLineEnding(in source: NSString) -> String {
+        let first = source.rangeOfCharacter(from: .newlines)
+        guard first.location != NSNotFound else { return "\n" }
+        let character = source.character(at: first.location)
+        if character == 13, first.location + 1 < source.length, source.character(at: first.location + 1) == 10 {
+            return "\r\n"
+        }
+        return UnicodeScalar(character).map(String.init) ?? "\n"
     }
 
     private static func shouldIncreaseIndent(after trimmed: String, language: CodeLanguage) -> Bool {

@@ -40,6 +40,9 @@ final class FormattingBridge: ObservableObject {
     /// Set by TextKit2EditorView.Coordinator after the NSTextView is created.
     weak var textView: NSTextView?
     var documentTextColor: NSColor = .labelColor
+    var documentCatalog: ScreenplayCatalog?
+    private(set) var isApplyingExplicitFormatting = false
+    private var restoreGeneration = 0
 
     // MARK: – Active-state publishers (updated on every selection change)
     @Published private(set) var isBold: Bool = false
@@ -58,8 +61,10 @@ final class FormattingBridge: ObservableObject {
     }
 
     func restoreEditorLocation(_ snapshot: EditorLocationSnapshot) {
+        restoreGeneration += 1
+        let generation = restoreGeneration
         DispatchQueue.main.async { [weak self] in
-            guard let textView = self?.textView else { return }
+            guard let self, self.restoreGeneration == generation, let textView = self.textView else { return }
             let length = (textView.string as NSString).length
             let location = min(max(0, snapshot.selection.location), length)
             let selection = NSRange(
@@ -105,7 +110,7 @@ final class FormattingBridge: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let imported = try DocumentImageSupport.loadPageImage(from: url)
-            guard let image = imported.image, let textStorage = textView.textStorage else {
+            guard let image = imported.image else {
                 throw CocoaError(.fileReadCorruptFile)
             }
 
@@ -122,11 +127,7 @@ final class FormattingBridge: ObservableObject {
             let replacement = NSAttributedString(attachment: attachment)
             let selectedRange = textView.selectedRange()
 
-            textStorage.beginEditing()
-            textStorage.replaceCharacters(in: selectedRange, with: replacement)
-            textStorage.endEditing()
-            textView.setSelectedRange(NSRange(location: selectedRange.location + replacement.length, length: 0))
-            textView.didChangeText()
+            textView.insertText(replacement, replacementRange: selectedRange)
         } catch {
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -140,7 +141,8 @@ final class FormattingBridge: ObservableObject {
         guard let textView,
               range.location >= 0,
               range.length >= 0,
-              NSMaxRange(range) <= textView.string.utf16.count else { return }
+              range.location <= textView.string.utf16.count,
+              range.length <= textView.string.utf16.count - range.location else { return }
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(range)
         textView.scrollRangeToVisible(range)
@@ -188,30 +190,40 @@ final class FormattingBridge: ObservableObject {
         }
 
         // Bold / italic derive from the symbolic traits of the current font
+        let newIsBold: Bool
+        let newIsItalic: Bool
         if let font = attrs[.font] as? NSFont {
             let traits = NSFontManager.shared.traits(of: font)
-            isBold      = traits.contains(.boldFontMask)
-            isItalic    = traits.contains(.italicFontMask)
+            newIsBold = traits.contains(.boldFontMask)
+            newIsItalic = traits.contains(.italicFontMask)
         } else {
-            isBold  = false
-            isItalic = false
+            newIsBold = false
+            newIsItalic = false
         }
+        if isBold != newIsBold { isBold = newIsBold }
+        if isItalic != newIsItalic { isItalic = newIsItalic }
 
         // Underline — non-zero value means active
         let underlineVal = attrs[.underlineStyle] as? Int ?? 0
-        isUnderline = underlineVal != 0
+        let newIsUnderline = underlineVal != 0
+        if isUnderline != newIsUnderline { isUnderline = newIsUnderline }
 
         // Strikethrough — check at selection start when there's a selection
-        if range.length > 0, let ts = tv.textStorage {
+        let newIsStrikethrough: Bool
+        if range.length > 0, let ts = tv.textStorage, range.location < ts.length {
             let strikeVal = ts.attribute(.strikethroughStyle, at: range.location, effectiveRange: nil) as? Int ?? 0
-            isStrikethrough = strikeVal != 0
+            newIsStrikethrough = strikeVal != 0
         } else {
             let strikeVal = attrs[.strikethroughStyle] as? Int ?? 0
-            isStrikethrough = strikeVal != 0
+            newIsStrikethrough = strikeVal != 0
         }
+        if isStrikethrough != newIsStrikethrough { isStrikethrough = newIsStrikethrough }
 
-        activeScreenplayElement = detectedScreenplayElement(in: tv)
-        screenplaySuggestions = makeScreenplaySuggestions(in: tv, activeElement: activeScreenplayElement)
+        let element = detectedScreenplayElement(in: tv)
+        publishScreenplayState(
+            element: element,
+            suggestions: makeScreenplaySuggestions(in: tv, activeElement: element)
+        )
     }
 
     // MARK: – Responder-chain actions (NSTextView handles these when first responder)
@@ -255,43 +267,70 @@ final class FormattingBridge: ObservableObject {
         applyScreenplayElement(element, to: tv)
     }
 
-    func applyScreenplayElement(_ element: ScreenplayElement, to tv: NSTextView, notifyTextChange: Bool = true) {
+    func applyScreenplayElement(
+        _ element: ScreenplayElement,
+        to tv: NSTextView,
+        notifyTextChange: Bool = true,
+        updatePublishedState: Bool = true,
+        isExplicit: Bool = true
+    ) {
         let style = screenplayStyle(for: element)
         let selection = tv.selectedRange()
         let paragraphRange = (tv.string as NSString).paragraphRange(for: selection)
+        let wasExplicit = isApplyingExplicitFormatting
+        if notifyTextChange { isApplyingExplicitFormatting = true }
+        defer { isApplyingExplicitFormatting = wasExplicit }
 
         if paragraphRange.length > 0, let ts = tv.textStorage {
-            ts.beginEditing()
-
-            if style.uppercase {
-                let original = (tv.string as NSString).substring(with: paragraphRange)
-                let uppercased = original.uppercased()
-                if uppercased != original {
-                    ts.replaceCharacters(in: paragraphRange, with: uppercased)
-                }
+            let original = (tv.string as NSString).substring(with: paragraphRange) as NSString
+            let uppercased = (original as String).uppercased()
+            // Length-changing case conversion during a native keystroke would
+            // invalidate AppKit's pending undo range (for example ß -> SS).
+            let changesCase = style.uppercase && (isExplicit || uppercased.utf16.count == original.length)
+            let replacement = NSMutableAttributedString(attributedString: ts.attributedSubstring(from: paragraphRange))
+            if changesCase, uppercased != original as String {
+                replacement.replaceCharacters(in: NSRange(location: 0, length: replacement.length), with: uppercased)
             }
-
-            let refreshedParagraphRange = (tv.string as NSString).paragraphRange(for: tv.selectedRange())
-            ts.addAttributes(screenplayAttributes(for: element), range: refreshedParagraphRange)
-            ts.endEditing()
+            let fullRange = NSRange(location: 0, length: replacement.length)
+            applyScreenplayAttributes(for: element, to: replacement, range: fullRange)
+            if isExplicit { replacement.addAttribute(.screenplayManualElement, value: element.rawValue, range: fullRange) }
+            if notifyTextChange, !tv.shouldChangeText(in: paragraphRange, replacementString: replacement.string) { return }
+            ts.replaceCharacters(in: paragraphRange, with: replacement)
+            if changesCase {
+                let start = min(max(0, selection.location - paragraphRange.location), original.length)
+                let end = min(start + selection.length, original.length)
+                let mappedStart = original.substring(to: start).uppercased().utf16.count
+                let mappedEnd = original.substring(to: end).uppercased().utf16.count
+                tv.setSelectedRange(NSRange(location: paragraphRange.location + mappedStart, length: mappedEnd - mappedStart))
+            } else {
+                tv.setSelectedRange(selection)
+            }
         }
 
-        configureTypingAttributes(for: element, in: tv)
-        activeScreenplayElement = element
-        screenplaySuggestions = makeScreenplaySuggestions(in: tv, activeElement: element)
+        configureTypingAttributes(for: element, in: tv, updatePublishedState: updatePublishedState)
         if notifyTextChange {
             tv.didChangeText()
         }
     }
 
-    func configureTypingAttributes(for element: ScreenplayElement, in tv: NSTextView) {
+    func configureTypingAttributes(
+        for element: ScreenplayElement,
+        in tv: NSTextView,
+        updatePublishedState: Bool = true
+    ) {
         var attrs = tv.typingAttributes
+        attrs.removeValue(forKey: .screenplaySceneIdentity)
+        attrs.removeValue(forKey: .screenplayManualElement)
         screenplayAttributes(for: element).forEach { attrs[$0.key] = $0.value }
         tv.typingAttributes = attrs
         tv.defaultParagraphStyle = screenplayStyle(for: element).paragraphStyle
         tv.insertionPointColor = documentTextColor
-        activeScreenplayElement = element
-        screenplaySuggestions = makeScreenplaySuggestions(in: tv, activeElement: element)
+        if updatePublishedState {
+            publishScreenplayState(
+                element: element,
+                suggestions: makeScreenplaySuggestions(in: tv, activeElement: element)
+            )
+        }
     }
 
     func detectedScreenplayElement(in tv: NSTextView) -> ScreenplayElement {
@@ -358,7 +397,10 @@ final class FormattingBridge: ObservableObject {
         let paragraph = currentParagraphText(in: tv, range: paragraphRange)
         let currentElement = detectedScreenplayElement(in: tv)
         let previousElement = previousNonEmptyScreenplayElement(before: paragraphRange.location, in: tv)
-        let inferredElement = inferScreenplayElement(
+        let explicit = paragraphRange.location < (tv.textStorage?.length ?? 0)
+            ? (tv.textStorage?.attribute(.screenplayManualElement, at: paragraphRange.location, effectiveRange: nil) as? String).flatMap(ScreenplayElement.init(rawValue:))
+            : nil
+        let inferredElement = explicit ?? inferScreenplayElement(
             for: paragraph,
             currentElement: currentElement,
             previousElement: previousElement
@@ -366,55 +408,113 @@ final class FormattingBridge: ObservableObject {
 
         // Live formatting must not trim text or synthesize punctuation while the
         // writer is still typing. Full normalization remains an explicit action.
-        applyScreenplayElement(inferredElement, to: tv, notifyTextChange: false)
+        applyScreenplayElement(inferredElement, to: tv, notifyTextChange: false, isExplicit: false)
         updateFormattingState(from: tv)
         return inferredElement
     }
 
     func autoFormatEntireScreenplay() {
-        guard let tv = textView, let textStorage = tv.textStorage else { return }
-
-        let originalSelection = tv.selectedRange()
-        var previousElement: ScreenplayElement?
-        var location = 0
-
-        while location < (tv.string as NSString).length {
-            let source = tv.string as NSString
-            let paragraphRange = source.paragraphRange(for: NSRange(location: location, length: 0))
-            let paragraph = source.substring(with: paragraphRange)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let taggedElement = textStorage.attribute(
-                .screenplayElement,
-                at: paragraphRange.location,
-                effectiveRange: nil
-            ) as? String
-            let currentElement = taggedElement.flatMap(ScreenplayElement.init(rawValue:)) ?? .action
-            let inferredElement = inferScreenplayElement(
-                for: paragraph,
-                currentElement: currentElement,
-                previousElement: previousElement
-            )
-
-            normalizeScreenplayParagraph(in: tv, range: paragraphRange, for: inferredElement)
-            let refreshedRange = (tv.string as NSString).paragraphRange(
-                for: NSRange(location: min(location, (tv.string as NSString).length), length: 0)
-            )
-            textStorage.addAttributes(screenplayAttributes(for: inferredElement), range: refreshedRange)
-
-            if !paragraph.isEmpty {
-                previousElement = inferredElement
-            }
-            let nextLocation = NSMaxRange(refreshedRange)
-            guard nextLocation > location else { break }
-            location = nextLocation
-        }
-
-        let finalLength = (tv.string as NSString).length
-        tv.setSelectedRange(NSRange(location: min(originalSelection.location, finalLength), length: 0))
-        let activeElement = detectedScreenplayElement(in: tv)
-        configureTypingAttributes(for: activeElement, in: tv)
-        updateFormattingState(from: tv)
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let range = NSRange(location: 0, length: storage.length)
+        guard range.length > 0 else { return }
+        let selection = tv.selectedRange()
+        let formatted = formattedScreenplay(storage, normalize: true)
+        let wasExplicit = isApplyingExplicitFormatting
+        isApplyingExplicitFormatting = true
+        defer { isApplyingExplicitFormatting = wasExplicit }
+        guard !formatted.isEqual(to: storage), tv.shouldChangeText(in: range, replacementString: formatted.string) else { return }
+        storage.setAttributedString(formatted)
+        tv.setSelectedRange(NSRange(location: min(selection.location, storage.length), length: 0))
+        configureTypingAttributes(for: detectedScreenplayElement(in: tv), in: tv)
         tv.didChangeText()
+    }
+
+    /// A multiline paste is one edit; format its paragraphs in one storage transaction.
+    /// Text and punctuation are left intact. The explicit Auto action can normalize them.
+    func formatInsertedScreenplay(in tv: NSTextView, range: NSRange) {
+        guard let storage = tv.textStorage, range.location >= 0, range.length >= 0,
+              range.location <= storage.length else { return }
+        let safe = NSRange(location: range.location, length: min(range.length, storage.length - range.location))
+        let paragraphs = (storage.string as NSString).paragraphRange(for: safe)
+        let source = storage.attributedSubstring(from: paragraphs)
+        let formatted = formattedScreenplay(source, normalize: false)
+        let selection = tv.selectedRange()
+        storage.beginEditing()
+        storage.replaceCharacters(in: paragraphs, with: formatted)
+        storage.endEditing()
+        tv.setSelectedRange(selection)
+        if selection.location > 0, selection.location <= storage.length,
+           (storage.string as NSString).character(at: selection.location - 1) == 10,
+           let raw = storage.attribute(.screenplayElement, at: selection.location - 1, effectiveRange: nil) as? String,
+           let previous = ScreenplayElement(rawValue: raw) {
+            configureTypingAttributes(for: previous.nextOnReturn, in: tv)
+        }
+    }
+
+    private func formattedScreenplay(_ source: NSAttributedString, normalize: Bool) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
+        let string = source.string as NSString
+        var location = 0
+        var previous: ScreenplayElement?
+        while location < string.length {
+            let range = string.paragraphRange(for: NSRange(location: location, length: 0))
+            let original = string.substring(with: range)
+            let value = original.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tagged = (source.attribute(.screenplayElement, at: location, effectiveRange: nil) as? String)
+                .flatMap(ScreenplayElement.init(rawValue:))
+            // Pasted text often inherits the preceding paragraph's attributes. Classify
+            // the batch from its contents; explicit Auto preserves existing semantics.
+            let current = normalize ? (tagged ?? .action) : .action
+            let explicit = normalize ? (source.attribute(.screenplayManualElement, at: location, effectiveRange: nil) as? String).flatMap(ScreenplayElement.init(rawValue:)) : nil
+            let element = explicit ?? inferScreenplayElement(for: value, currentElement: current, previousElement: previous)
+            let paragraph = NSMutableAttributedString(attributedString: source.attributedSubstring(from: range))
+            if !normalize {
+                paragraph.removeAttribute(.screenplayManualElement, range: NSRange(location: 0, length: paragraph.length))
+            }
+            if normalize, !value.isEmpty {
+                var normalized = value
+                if element == .parenthetical {
+                    if !normalized.hasPrefix("(") { normalized = "(" + normalized }
+                    if !normalized.hasSuffix(")") { normalized += ")" }
+                }
+                if element == .transition, !normalized.hasSuffix(":"), !normalized.hasSuffix(".") { normalized += ":" }
+                if screenplayStyle(for: element).uppercase { normalized = normalized.uppercased() }
+                let ending = String(original.reversed().prefix(while: \.isNewline).reversed())
+                // Avoid replacing unchanged text so mixed bold/italic runs survive.
+                if normalized + ending != original { paragraph.replaceCharacters(in: NSRange(location: 0, length: paragraph.length), with: normalized + ending) }
+            }
+            applyScreenplayAttributes(for: element, to: paragraph, range: NSRange(location: 0, length: paragraph.length))
+            result.append(paragraph)
+            previous = value.isEmpty ? nil : element
+            location = NSMaxRange(range)
+        }
+        return result
+    }
+
+    private func applyScreenplayAttributes(for element: ScreenplayElement, to text: NSMutableAttributedString, range: NSRange) {
+        guard range.length > 0 else { return }
+        var attributes = screenplayAttributes(for: element)
+        let baseFont = attributes.removeValue(forKey: .font) as! NSFont
+        let preservesEmphasis = element == .action || element == .dialogue || element == .parenthetical
+        var fonts: [(NSRange, NSFont)] = []
+        text.enumerateAttribute(.font, in: range) { value, run, _ in
+            var font = baseFont
+            if preservesEmphasis, let original = value as? NSFont {
+                var traits = NSFontManager.shared.traits(of: original).intersection([.boldFontMask, .italicFontMask])
+                if let raw = text.attribute(.screenplayElement, at: run.location, effectiveRange: nil) as? String,
+                   let previous = ScreenplayElement(rawValue: raw), previous != element {
+                    // A paste can inherit a bold heading font. Remove the old element's
+                    // built-in traits while retaining emphasis the writer added.
+                    let inherited = NSFontManager.shared.traits(of: screenplayStyle(for: previous).font)
+                        .intersection([.boldFontMask, .italicFontMask])
+                    traits.subtract(inherited)
+                }
+                font = NSFontManager.shared.convert(baseFont, toHaveTrait: traits)
+            }
+            fonts.append((run, font))
+        }
+        text.addAttributes(attributes, range: range)
+        for (run, font) in fonts { text.addAttribute(.font, value: font, range: run) }
     }
 
     func applySuggestion(_ suggestion: ScreenplaySuggestion) {
@@ -426,9 +526,30 @@ final class FormattingBridge: ObservableObject {
             ? appendedSlugSuffix(from: currentText, suffix: suggestion.text)
             : suggestion.text
 
-        replaceParagraph(in: tv, range: paragraphRange, with: replacement)
-        applyScreenplayElement(suggestion.element, to: tv, notifyTextChange: false)
-        normalizeScreenplayParagraph(in: tv, range: currentParagraphRange(in: tv), for: suggestion.element)
+        guard let storage = tv.textStorage else { return }
+        let original = (tv.string as NSString).substring(with: paragraphRange)
+        // A suggestion replaces the paragraph's contents, never its separator.
+        // Dropping the newline would join the following action/dialogue to the cue.
+        let ending = String(original.reversed().prefix(while: \.isNewline).reversed())
+        var value = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        if suggestion.element == .parenthetical {
+            if !value.hasPrefix("(") { value = "(" + value }
+            if !value.hasSuffix(")") { value += ")" }
+        }
+        if suggestion.element == .transition, !value.hasSuffix(":"), !value.hasSuffix(".") { value += ":" }
+        if screenplayStyle(for: suggestion.element).uppercase { value = value.uppercased() }
+        let formatted = NSMutableAttributedString(string: value + ending, attributes: screenplayAttributes(for: suggestion.element))
+        formatted.addAttribute(.screenplayManualElement, value: suggestion.element.rawValue, range: NSRange(location: 0, length: formatted.length))
+        if paragraphRange.length > 0, let identity = storage.attribute(.screenplaySceneIdentity, at: paragraphRange.location, effectiveRange: nil) {
+            formatted.addAttribute(.screenplaySceneIdentity, value: identity, range: NSRange(location: 0, length: formatted.length))
+        }
+        let wasExplicit = isApplyingExplicitFormatting
+        isApplyingExplicitFormatting = true
+        defer { isApplyingExplicitFormatting = wasExplicit }
+        guard tv.shouldChangeText(in: paragraphRange, replacementString: formatted.string) else { return }
+        storage.replaceCharacters(in: paragraphRange, with: formatted)
+        tv.setSelectedRange(NSRange(location: paragraphRange.location + value.utf16.count, length: 0))
+        configureTypingAttributes(for: suggestion.element, in: tv)
         updateFormattingState(from: tv)
         tv.didChangeText()
     }
@@ -440,6 +561,7 @@ final class FormattingBridge: ObservableObject {
         guard range.length > 0, let ts = tv.textStorage else { return }
         let existing = ts.attribute(.strikethroughStyle, at: range.location, effectiveRange: nil) as? Int ?? 0
         let newValue = existing == 0 ? NSUnderlineStyle.single.rawValue : 0
+        guard tv.shouldChangeText(in: range, replacementString: nil) else { return }
         ts.addAttribute(.strikethroughStyle, value: newValue, range: range)
         tv.didChangeText()
     }
@@ -466,6 +588,7 @@ final class FormattingBridge: ObservableObject {
         let sizedFont = NSFontManager.shared.convert(baseFont, toSize: fontSize)
         let boldFont  = NSFontManager.shared.convert(sizedFont, toHaveTrait: .boldFontMask)
 
+        guard tv.shouldChangeText(in: paragraphRange, replacementString: nil) else { return }
         ts.addAttribute(.font, value: boldFont, range: paragraphRange)
         tv.didChangeText()
     }
@@ -619,7 +742,7 @@ final class FormattingBridge: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
 
-        let sceneHeadingPrefixes = ["INT.", "EXT.", "INT/EXT.", "INT./EXT.", "EXT./INT.", "I/E.", "EST."]
+        let sceneHeadingPrefixes = ScreenplayCatalog.scenePrefixes
         if sceneHeadingPrefixes.contains(where: { matchesPrefix($0, in: normalized) }) {
             return .sceneHeading
         }
@@ -677,7 +800,7 @@ final class FormattingBridge: ObservableObject {
         let words = normalized.split(whereSeparator: \.isWhitespace)
         guard words.count <= 4 else { return false }
 
-        if normalized.hasSuffix("!") || normalized.hasSuffix("?") {
+        if normalized.hasSuffix("!") || normalized.hasSuffix("?") || normalized.hasSuffix("—") || normalized.hasSuffix("--") {
             return false
         }
         if normalized.hasSuffix("."),
@@ -685,56 +808,6 @@ final class FormattingBridge: ObservableObject {
             return false
         }
         return normalized.rangeOfCharacter(from: CharacterSet.letters) != nil
-    }
-
-    private func normalizeScreenplayParagraph(in tv: NSTextView, range: NSRange, for element: ScreenplayElement) {
-        let originalParagraph = (tv.string as NSString).substring(with: range)
-        let hasTrailingNewline = originalParagraph.hasSuffix("\n")
-        let trimmed = originalParagraph.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        var normalized = trimmed
-        let style = screenplayStyle(for: element)
-
-        if element == .parenthetical {
-            if !normalized.hasPrefix("(") {
-                normalized = "(\(normalized)"
-            }
-            if !normalized.hasSuffix(")") {
-                normalized += ")"
-            }
-        }
-
-        if element == .transition {
-            if !normalized.hasSuffix(":") && !normalized.hasSuffix(".") {
-                normalized += ":"
-            }
-        }
-
-        if style.uppercase {
-            normalized = normalized.uppercased()
-        }
-
-        let replacement = hasTrailingNewline ? normalized + "\n" : normalized
-        guard replacement != originalParagraph else { return }
-
-        replaceParagraph(in: tv, range: range, with: replacement)
-    }
-
-    private func replaceParagraph(in tv: NSTextView, range: NSRange, with replacement: String) {
-        guard let textStorage = tv.textStorage else { return }
-
-        let originalSelection = tv.selectedRange()
-        let selectionOffset = max(0, originalSelection.location - range.location)
-        let oldLength = range.length
-
-        textStorage.beginEditing()
-        textStorage.replaceCharacters(in: range, with: replacement)
-        textStorage.endEditing()
-
-        let lengthDelta = (replacement as NSString).length - oldLength
-        let newLocation = min(range.location + selectionOffset + max(0, lengthDelta), (tv.string as NSString).length)
-        tv.setSelectedRange(NSRange(location: newLocation, length: 0))
     }
 
     private func appendedSlugSuffix(from paragraph: String, suffix: String) -> String {
@@ -771,6 +844,10 @@ final class FormattingBridge: ObservableObject {
                     ScreenplaySuggestion(label: "INT./EXT.", text: "INT./EXT. VEHICLE - DAY", element: .sceneHeading, behavior: .replaceParagraph),
                     ScreenplaySuggestion(label: "EST.", text: "EST. CITYSCAPE - DAWN", element: .sceneHeading, behavior: .replaceParagraph)
                 ]
+            }
+            if let documentCatalog {
+                suggestions += documentCatalog.headings.filter { trimmed.isEmpty || $0.hasPrefix(trimmed) }
+                    .prefix(6).map { ScreenplaySuggestion(label: $0, text: $0, element: .sceneHeading, behavior: .replaceParagraph) }
             }
             suggestions += [
                 ScreenplaySuggestion(label: "DAY", text: "DAY", element: .sceneHeading, behavior: .appendSlugSuffix),
@@ -823,8 +900,9 @@ final class FormattingBridge: ObservableObject {
                 ScreenplaySuggestion(label: "(O.S.)", text: "(O.S.)", element: .parenthetical, behavior: .replaceParagraph)
             ]
         case .character:
+            let characterName = canonicalCharacterName(from: trimmed)
             let recentCharacters = existingCharacterNames(in: tv)
-                .filter { $0 != trimmed }
+                .filter { $0 != characterName }
                 .prefix(5)
                 .map {
                     ScreenplaySuggestion(
@@ -835,8 +913,9 @@ final class FormattingBridge: ObservableObject {
                     )
                 }
             return recentCharacters + [
-                ScreenplaySuggestion(label: "O.S.", text: "\(trimmed.isEmpty ? "CHARACTER" : trimmed) (O.S.)", element: .character, behavior: .replaceParagraph),
-                ScreenplaySuggestion(label: "V.O.", text: "\(trimmed.isEmpty ? "CHARACTER" : trimmed) (V.O.)", element: .character, behavior: .replaceParagraph)
+                ScreenplaySuggestion(label: "O.S.", text: "\(characterName) (O.S.)", element: .character, behavior: .replaceParagraph),
+                ScreenplaySuggestion(label: "V.O.", text: "\(characterName) (V.O.)", element: .character, behavior: .replaceParagraph),
+                ScreenplaySuggestion(label: "CONT'D", text: "\(characterName) (CONT'D)", element: .character, behavior: .replaceParagraph)
             ]
         case .action, .dialogue:
             return []
@@ -852,6 +931,7 @@ final class FormattingBridge: ObservableObject {
     }
 
     private func existingCharacterNames(in tv: NSTextView) -> [String] {
+        if let documentCatalog { return documentCatalog.characters }
         let text = tv.string as NSString
         guard text.length > 0 else { return [] }
 
@@ -863,13 +943,29 @@ final class FormattingBridge: ObservableObject {
             let tagged = tv.textStorage?.attribute(.screenplayElement, at: range.location, effectiveRange: nil) as? String
             if !paragraph.isEmpty,
                tagged == ScreenplayElement.character.rawValue || looksLikeCharacterCue(paragraph) {
-                names.append(paragraph.uppercased())
+                names.append(canonicalCharacterName(from: paragraph))
             }
             location = NSMaxRange(range)
         }
 
         var seen = Set<String>()
         return names.reversed().filter { seen.insert($0).inserted }
+    }
+
+    private func publishScreenplayState(
+        element: ScreenplayElement,
+        suggestions: [ScreenplaySuggestion]
+    ) {
+        if activeScreenplayElement != element {
+            activeScreenplayElement = element
+        }
+        if screenplaySuggestions != suggestions {
+            screenplaySuggestions = suggestions
+        }
+    }
+
+    private func canonicalCharacterName(from cue: String) -> String {
+        ScreenplayCatalog.canonicalCharacterName(cue)
     }
 
     private func screenplayFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {

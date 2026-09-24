@@ -28,6 +28,8 @@ public struct GlassChromeBackground: ViewModifier {
         case elevated
     }
 
+    @ObservedObject private var appearance = MongrelAppearancePreferences.shared
+
     public let style:        Style
     public let cornerRadius: CGFloat
     /// When `true` an accent-hued drop shadow is added beneath the panel.
@@ -59,7 +61,7 @@ public struct GlassChromeBackground: ViewModifier {
             // 1. System material (blur) — only on elevated floating surfaces.
             //    Applying blur to every note card is the primary CPU hog at idle;
             //    solid dark fills look identical against our near-black canvas.
-            if style == .elevated {
+            if style == .elevated && appearance.mode != .contrast {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(.ultraThinMaterial)
             }
@@ -68,50 +70,52 @@ public struct GlassChromeBackground: ViewModifier {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(fillColor)
 
-            // 3. Radial hot-spot — upper-left point light
-            RadialGradient(
-                colors: [DesignTokens.glassHotSpot, .clear],
-                center: .init(x: 0.28, y: 0.02),
-                startRadius: 0,
-                endRadius: style == .card ? 120 : 200
-            )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-
-            // 4a. Top-edge specular — crisp 1 pt capture line
-            VStack(spacing: 0) {
-                DesignTokens.specularCapture
-                    .frame(height: 1)
-                Spacer()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-
-            // 4b. Top-edge diffused catch — broader glow bleeding downward
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [DesignTokens.glassEdgeCatch, .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
+            if appearance.mode != .contrast {
+                // 3. Radial hot-spot — upper-left point light
+                RadialGradient(
+                    colors: [DesignTokens.glassHotSpot, .clear],
+                    center: .init(x: 0.28, y: 0.02),
+                    startRadius: 0,
+                    endRadius: style == .card ? 120 : 200
                 )
-                .frame(height: 12)
-                Spacer()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
 
-            // 5. Bottom-edge chromatic cooldown (light bends around the bottom)
-            VStack(spacing: 0) {
-                Spacer()
-                LinearGradient(
-                    colors: [.clear,
-                             Color(hue: DesignTokens.energyHue,
-                                   saturation: 0.60,
-                                   brightness: 0.05,
-                                   opacity: 0.18)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 6)
+                // 4a. Top-edge specular — crisp 1 pt capture line
+                VStack(spacing: 0) {
+                    DesignTokens.specularCapture
+                        .frame(height: 1)
+                    Spacer()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+
+                // 4b. Top-edge diffused catch — broader glow bleeding downward
+                VStack(spacing: 0) {
+                    LinearGradient(
+                        colors: [DesignTokens.glassEdgeCatch, .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 12)
+                    Spacer()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+
+                // 5. Bottom-edge chromatic cooldown (light bends around the bottom)
+                VStack(spacing: 0) {
+                    Spacer()
+                    LinearGradient(
+                        colors: [.clear,
+                                 Color(hue: DesignTokens.energyHue,
+                                       saturation: 0.60,
+                                       brightness: 0.05,
+                                       opacity: 0.18)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 6)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
     }
 

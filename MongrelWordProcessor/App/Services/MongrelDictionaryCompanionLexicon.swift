@@ -12,7 +12,12 @@ struct MongrelDictionaryCompanionStatus {
     }
 }
 
-final class MongrelDictionaryCompanionLexicon {
+final class MongrelDictionaryCompanionLexicon: @unchecked Sendable {
+    static let didFinishLoadingNotification = Notification.Name(
+        "MongrelDictionaryCompanionLexiconDidFinishLoading"
+    )
+    private static let correctionAlphabet = Array("abcdefghijklmnopqrstuvwxyz'-")
+
     private struct Manifest: Decodable {
         struct Counts: Decodable {
             let referenceNotes: Int
@@ -25,8 +30,19 @@ final class MongrelDictionaryCompanionLexicon {
         let counts: Counts
     }
 
-    private let headwords: Set<String>
-    private let sortedHeadwords: [String]
+    private struct Storage {
+        let headwords: Set<String>
+        let sortedHeadwords: [String]
+    }
+
+    private enum LoadState {
+        case pending(URL?)
+        case loading
+        case loaded(Storage)
+    }
+
+    private let loadCondition = NSCondition()
+    private var loadState: LoadState
     let status: MongrelDictionaryCompanionStatus
 
     init() {
@@ -34,18 +50,23 @@ final class MongrelDictionaryCompanionLexicon {
         let dictionaryURL = packageURL?.appendingPathComponent("spellcheck_dictionary.txt")
         let manifestURL = packageURL?.appendingPathComponent("manifest.json")
 
-        let loadedHeadwords = Self.loadHeadwords(from: dictionaryURL)
         let manifest = Self.loadManifest(from: manifestURL)
         let sourceDescription = packageURL?.path ?? "Unavailable"
+        let isAvailable = dictionaryURL.map { FileManager.default.isReadableFile(atPath: $0.path) } ?? false
 
-        self.headwords = Set(loadedHeadwords)
-        self.sortedHeadwords = loadedHeadwords
+        self.loadState = .pending(dictionaryURL)
         self.status = MongrelDictionaryCompanionStatus(
-            isAvailable: !loadedHeadwords.isEmpty,
+            isAvailable: isAvailable,
             sourceDescription: sourceDescription,
-            headwordCount: loadedHeadwords.count,
+            headwordCount: manifest?.counts.headwords ?? 0,
             structuredEntryCount: manifest?.counts.structuredEntries ?? 0
         )
+
+        if isAvailable {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                self?.preload()
+            }
+        }
     }
 
     init(headwords: [String], sourceDescription: String = "Injected lexicon") {
@@ -54,8 +75,10 @@ final class MongrelDictionaryCompanionLexicon {
             .filter { !$0.isEmpty }
         let uniqueHeadwords = Array(Set(normalizedHeadwords)).sorted()
 
-        self.headwords = Set(uniqueHeadwords)
-        self.sortedHeadwords = uniqueHeadwords
+        self.loadState = .loaded(Storage(
+            headwords: Set(uniqueHeadwords),
+            sortedHeadwords: uniqueHeadwords
+        ))
         self.status = MongrelDictionaryCompanionStatus(
             isAvailable: !uniqueHeadwords.isEmpty,
             sourceDescription: sourceDescription,
@@ -65,31 +88,40 @@ final class MongrelDictionaryCompanionLexicon {
     }
 
     func contains(_ word: String) -> Bool {
-        headwords.contains(Self.normalizedLookupKey(word))
+        storage().headwords.contains(Self.normalizedLookupKey(word))
     }
 
     func suggestions(for word: String, limit: Int = 6) -> [String] {
+        guard limit > 0 else { return [] }
+        guard let storage = loadedStorage() else { return [] }
         let normalized = Self.normalizedLookupKey(word)
-        guard normalized.count >= 2, !headwords.contains(normalized) else { return [] }
+        guard normalized.count >= 2, !storage.headwords.contains(normalized) else { return [] }
 
         let prefix = String(normalized.prefix(min(3, normalized.count)))
-        var candidates = prefixMatches(prefix: prefix, limit: max(limit * 3, 18))
+        let prefixCandidates = prefixMatches(
+            prefix: prefix,
+            limit: max(limit * 4, 24),
+            sortedHeadwords: storage.sortedHeadwords
+        )
             .filter { $0 != normalized }
+        let corrections = singleEditCorrections(for: normalized, headwords: storage.headwords)
+        let correctionSet = Set(corrections)
+        let candidates = Set(prefixCandidates).union(correctionSet)
 
-        if candidates.count < limit {
-            let fuzzyMatches = sortedHeadwords.filter { candidate in
-                candidate != normalized && isNearby(candidate, normalized)
+        return candidates
+            .sorted { lhs, rhs in
+                let lhsRank = suggestionRank(lhs, term: normalized, corrections: correctionSet)
+                let rhsRank = suggestionRank(rhs, term: normalized, corrections: correctionSet)
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
+                if lhs.count != rhs.count { return lhs.count < rhs.count }
+                return lhs < rhs
             }
-            candidates.append(contentsOf: fuzzyMatches)
-        }
-
-        return Array(NSOrderedSet(array: candidates)) // preserve order while deduping
-            .compactMap { $0 as? String }
             .prefix(limit)
             .map { $0 }
     }
 
     func tokenizedCompanionWords(in text: String) -> [String] {
+        guard let headwords = loadedStorage()?.headwords else { return [] }
         let nsText = text as NSString
         let fullRange = NSRange(location: 0, length: nsText.length)
         guard let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{M}][\p{L}\p{M}'’\-]*"#, options: []) else {
@@ -99,14 +131,14 @@ final class MongrelDictionaryCompanionLexicon {
         var matches: [String] = []
         for match in regex.matches(in: text, options: [], range: fullRange) {
             let token = nsText.substring(with: match.range)
-            if contains(token) {
+            if headwords.contains(Self.normalizedLookupKey(token)) {
                 matches.append(token)
             }
         }
         return matches
     }
 
-    private func prefixMatches(prefix: String, limit: Int) -> [String] {
+    private func prefixMatches(prefix: String, limit: Int, sortedHeadwords: [String]) -> [String] {
         guard !prefix.isEmpty, !sortedHeadwords.isEmpty else { return [] }
 
         var low = 0
@@ -129,37 +161,115 @@ final class MongrelDictionaryCompanionLexicon {
         return results
     }
 
-    private func isNearby(_ candidate: String, _ term: String) -> Bool {
-        if abs(candidate.count - term.count) > 2 {
-            return false
-        }
-        if candidate.hasPrefix(term) || term.hasPrefix(candidate) {
-            return true
-        }
-        return deletionSignatures(for: candidate).contains(term) || deletionSignatures(for: term).contains(candidate)
+    private func preload() {
+        _ = storage()
     }
 
-    private func deletionSignatures(for term: String) -> [String] {
-        guard term.count >= 2 else { return [] }
+    private func storage() -> Storage {
+        loadCondition.lock()
+
+        while true {
+            switch loadState {
+            case .loaded(let storage):
+                loadCondition.unlock()
+                return storage
+            case .loading:
+                loadCondition.wait()
+            case .pending(let url):
+                loadState = .loading
+                loadCondition.unlock()
+
+                let loadedHeadwords = Self.loadHeadwords(from: url)
+                let storage = Storage(
+                    headwords: Set(loadedHeadwords),
+                    sortedHeadwords: loadedHeadwords
+                )
+
+                loadCondition.lock()
+                loadState = .loaded(storage)
+                loadCondition.broadcast()
+                loadCondition.unlock()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    NotificationCenter.default.post(
+                        name: Self.didFinishLoadingNotification,
+                        object: self
+                    )
+                }
+                return storage
+            }
+        }
+    }
+
+    private func loadedStorage() -> Storage? {
+        loadCondition.lock()
+        defer { loadCondition.unlock() }
+        guard case .loaded(let storage) = loadState else { return nil }
+        return storage
+    }
+
+    private func suggestionRank(_ candidate: String, term: String, corrections: Set<String>) -> Int {
+        if candidate.hasPrefix(term) { return 0 }
+        if corrections.contains(candidate) { return 1 }
+        return 2
+    }
+
+    private func singleEditCorrections(for term: String, headwords: Set<String>) -> [String] {
         let characters = Array(term)
-        var signatures = Set<String>()
+        var matches = Set<String>()
+
+        func include(_ candidate: [Character]) {
+            let value = String(candidate)
+            if value != term, headwords.contains(value) {
+                matches.insert(value)
+            }
+        }
 
         for index in characters.indices {
             var copy = characters
             copy.remove(at: index)
-            let value = String(copy).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                signatures.insert(value)
+            include(copy)
+        }
+
+        if characters.count > 1 {
+            for index in 0..<(characters.count - 1) where characters[index] != characters[index + 1] {
+                var copy = characters
+                copy.swapAt(index, index + 1)
+                include(copy)
             }
         }
 
-        return Array(signatures)
+        for index in characters.indices {
+            for replacement in Self.correctionAlphabet where replacement != characters[index] {
+                var copy = characters
+                copy[index] = replacement
+                include(copy)
+            }
+        }
+
+        for index in 0...characters.count {
+            for insertion in Self.correctionAlphabet {
+                var copy = characters
+                copy.insert(insertion, at: index)
+                include(copy)
+            }
+        }
+
+        return matches.sorted()
     }
 
     private static func resolvePackageURL() -> URL? {
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("MongrelDictionaryCompanionPackage"),
            FileManager.default.fileExists(atPath: bundled.path) {
             return bundled
+        }
+
+        // Xcode flattens folder references added as resources in generated projects.
+        if let bundledDictionary = Bundle.main.url(
+            forResource: "spellcheck_dictionary",
+            withExtension: "txt"
+        ) {
+            return bundledDictionary.deletingLastPathComponent()
         }
 
         let projectRoot = URL(fileURLWithPath: #filePath)

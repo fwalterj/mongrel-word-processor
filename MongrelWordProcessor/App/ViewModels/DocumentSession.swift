@@ -35,6 +35,8 @@ struct ScreenplayScene: Identifiable, Equatable {
     let heading: String
     let location: Int
 
+    var productionNumber: String? = nil
+    var displayNumber: String { productionNumber ?? String(number) }
     var id: Int { location }
 }
 
@@ -382,6 +384,31 @@ struct DocumentWorkspaceTabState {
     var pageLayout: DocumentPageLayout
     var hasUnsavedChanges: Bool
     var editorLocation: EditorLocationSnapshot
+    var diskVersion: DocumentDiskVersion? = nil
+    var screenplaySettings: ScreenplayDocumentSettings = .init()
+}
+
+struct DocumentDiskVersion: Equatable {
+    let modificationDate: Date?
+    let fileSize: Int?
+    let fileNumber: UInt64?
+    let systemNumber: UInt64?
+
+    static func capture(at url: URL, fileManager: FileManager = .default) -> DocumentDiskVersion? {
+        let didAccessSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccessSecurityScope {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path) else { return nil }
+        return DocumentDiskVersion(
+            modificationDate: attributes[.modificationDate] as? Date,
+            fileSize: (attributes[.size] as? NSNumber)?.intValue,
+            fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+            systemNumber: (attributes[.systemNumber] as? NSNumber)?.uint64Value
+        )
+    }
 }
 
 @MainActor
@@ -434,6 +461,20 @@ final class DocumentSession: ObservableObject {
     @Published private(set) var screenplayPageCount: Int = 1
     @Published private(set) var screenplaySceneCount: Int = 0
     @Published private(set) var screenplayScenes: [ScreenplayScene] = []
+    @Published private(set) var activeScreenplaySceneID: Int?
+    private var screenplayCursorLocation = 0
+    @Published private(set) var screenplayCatalog = ScreenplayCatalog()
+    @Published var screenplaySettings = ScreenplayDocumentSettings() {
+        didSet {
+            guard screenplaySettings != oldValue, !isApplyingProgrammaticState else { return }
+            if screenplaySettings.draft != oldValue.draft {
+                screenplaySettings.showsSceneNumbers = screenplaySettings.draft == .production
+            }
+            hasUnsavedChanges = true
+            updateMetrics()
+            scheduleWorkspaceRecovery()
+        }
+    }
     @Published private(set) var documentInsights: DocumentInsightSnapshot = .empty
     @Published private(set) var languageToolIssues: [LanguageToolIssue] = []
     @Published private(set) var languageToolState: LanguageToolCheckState = .idle
@@ -455,7 +496,7 @@ final class DocumentSession: ObservableObject {
                 hasUnsavedChanges = true
                 scheduleWorkspaceRecovery()
             }
-            updateMetrics()
+            if !isSwitchingTabs { updateMetrics() }
             refreshActiveTabMetadata()
         }
     }
@@ -567,7 +608,7 @@ final class DocumentSession: ObservableObject {
     var codeLineCount: Int {
         guard !attributedText.string.isEmpty else { return 1 }
         return attributedText.string.reduce(into: 1) { count, character in
-            if character == "\n" { count += 1 }
+            if character.isNewline { count += 1 }
         }
     }
 
@@ -601,6 +642,7 @@ final class DocumentSession: ObservableObject {
     }
 
     private var currentType: UTType = .mongrelDocument
+    private var currentDiskVersion: DocumentDiskVersion?
     private var isApplyingProgrammaticState = false
     private var isSwitchingTabs = false
     private var workspaceTabStates: [UUID: DocumentWorkspaceTabState] = [:]
@@ -611,6 +653,12 @@ final class DocumentSession: ObservableObject {
     private let defaults: UserDefaults
     private let errorPresenter: (String, String) -> Void
     private var workspaceRecoveryWorkItem: DispatchWorkItem?
+    private var metricsWorkItem: DispatchWorkItem?
+    private var lastMetricsText: NSAttributedString?
+    private var lastMetricsMode: AuthoringMode?
+    private var lastMetricsDraft: ScreenplayDraftStage?
+    private let recoveryWriter = CoalescingWorkspaceRecoveryWriter()
+    private var recoveryArchiveCache: [UUID: MongrelDocumentArchive] = [:]
     private let recentDocsKey = "wordprocessor.recentDocs"
     private let editorZoomKey = "wordprocessor.editorZoom"
     private let screenplayViewStyleKey = "wordprocessor.screenplayViewStyle"
@@ -708,6 +756,50 @@ final class DocumentSession: ObservableObject {
         switchToTab(workspaceTabs[nextIndex].id)
     }
 
+    func selectAdjacentScene(offset: Int) {
+        guard authoringMode == .screenplay,
+              offset != 0,
+              !screenplayScenes.isEmpty else { return }
+
+        let caretLocation = formattingBridge.captureEditorLocation().selection.location
+        let target: ScreenplayScene?
+        if offset > 0 {
+            target = screenplayScenes.first(where: { $0.location > caretLocation })
+                ?? screenplayScenes.first
+        } else {
+            target = screenplayScenes.last(where: { $0.location < caretLocation })
+                ?? screenplayScenes.last
+        }
+
+        guard let target else { return }
+        formattingBridge.focusScreenplayLocation(target.location)
+        screenplayElement = .sceneHeading
+    }
+
+    func screenplayScenes(matching query: String) -> [ScreenplayScene] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return screenplayScenes }
+
+        let productionQuery = trimmedQuery.replacingOccurrences(of: "#", with: "").uppercased()
+        if screenplaySettings.draft == .production,
+           screenplayScenes.contains(where: { $0.productionNumber == productionQuery }) {
+            return screenplayScenes.filter { $0.productionNumber == productionQuery }
+        }
+        let numberQuery = trimmedQuery.hasPrefix("#")
+            ? String(trimmedQuery.dropFirst())
+            : trimmedQuery
+        if let sceneNumber = Int(numberQuery), sceneNumber > 0 {
+            return screenplayScenes.filter { $0.number == sceneNumber }
+        }
+
+        let terms = trimmedQuery
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        return screenplayScenes.filter { scene in
+            terms.allSatisfy { scene.heading.localizedStandardContains($0) }
+        }
+    }
+
     func closeTab(_ id: UUID) {
         guard let initialIndex = workspaceTabs.firstIndex(where: { $0.id == id }) else { return }
         let previouslyActiveTabID = activeTabID
@@ -731,25 +823,27 @@ final class DocumentSession: ObservableObject {
     }
 
     func reopenClosedTab() {
-        guard let (tab, state) = closedWorkspaceTabs.popLast() else { return }
+        guard let (tab, archivedState) = closedWorkspaceTabs.popLast() else { return }
         canReopenClosedTab = !closedWorkspaceTabs.isEmpty
+        var state = archivedState
 
         if let url = state.currentURL,
            let existingTab = workspaceTabs.first(where: { urlsReferToSameDocument($0.url, url) }) {
-            switchToTab(existingTab.id)
-            return
+            if state.hasUnsavedChanges {
+                state.title = recoveredTitle(for: state.title)
+                state.currentURL = nil
+                state.diskVersion = nil
+            } else {
+                switchToTab(existingTab.id)
+                return
+            }
         }
 
+        state = reconciledCleanNamedState(state)
         autosaveCurrentTabIfNeeded()
         syncActiveTabState()
         let id = workspaceTabs.contains(where: { $0.id == tab.id }) ? UUID() : tab.id
-        workspaceTabs.append(DocumentWorkspaceTab(
-            id: id,
-            title: tab.title,
-            mode: tab.mode,
-            isDirty: tab.isDirty,
-            url: tab.url
-        ))
+        workspaceTabs.append(workspaceTab(from: state, id: id))
         workspaceTabStates[id] = state
         activateWorkspaceTab(id, autosaveCurrent: false)
     }
@@ -762,6 +856,7 @@ final class DocumentSession: ObservableObject {
         state.title = "\(state.title) Copy"
         state.attributedText = state.attributedText.copy() as? NSAttributedString ?? state.attributedText
         state.currentURL = nil
+        state.diskVersion = nil
         state.hasUnsavedChanges = true
         state.editorLocation = EditorLocationSnapshot()
         installNewWorkspaceTab(state: state, reuseActiveTab: false)
@@ -779,10 +874,22 @@ final class DocumentSession: ObservableObject {
         NSPasteboard.general.setString(path, forType: .string)
     }
 
-    func markDirty() {
+    func markDirty(deferMetrics: Bool = false) {
+        lastMetricsText = nil
         hasUnsavedChanges = true
         invalidateLanguageToolResults()
-        updateMetrics()
+        metricsWorkItem?.cancel()
+        if deferMetrics {
+            let tabID = activeTabID
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.activeTabID == tabID else { return }
+                self.updateMetrics()
+            }
+            metricsWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        } else {
+            updateMetrics()
+        }
         scheduleWorkspaceRecovery()
     }
 
@@ -790,6 +897,21 @@ final class DocumentSession: ObservableObject {
         workspaceRecoveryWorkItem?.cancel()
         workspaceRecoveryWorkItem = nil
         persistWorkspaceRecovery()
+        // Closing/losing focus is a durability boundary: drain earlier writes in order.
+        recoveryWriter.flush()
+    }
+
+    func updateScreenplayCursor(location: Int) {
+        screenplayCursorLocation = min(max(0, location), attributedText.length)
+        var low = 0
+        var high = screenplayScenes.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if screenplayScenes[middle].location <= screenplayCursorLocation { low = middle + 1 }
+            else { high = middle }
+        }
+        let active = authoringMode == .screenplay && low > 0 ? screenplayScenes[low - 1].id : nil
+        if activeScreenplaySceneID != active { activeScreenplaySceneID = active }
     }
 
     func updateRenderedScreenplayPageCount(_ count: Int) {
@@ -900,7 +1022,19 @@ final class DocumentSession: ObservableObject {
     @discardableResult
     func openDocument(at url: URL) -> Bool {
         if let existingTab = workspaceTabs.first(where: { urlsReferToSameDocument($0.url, url) }) {
-            switchToTab(existingTab.id)
+            if existingTab.id == activeTabID {
+                syncActiveTabState()
+                if var state = workspaceTabStates[existingTab.id] {
+                    state = reconciledCleanNamedState(state)
+                    workspaceTabStates[existingTab.id] = state
+                    loadWorkspaceState(state)
+                    refreshActiveTabMetadata()
+                    scheduleWorkspaceRecovery()
+                }
+            } else {
+                switchToTab(existingTab.id)
+            }
+            trackRecent(url)
             return true
         }
 
@@ -914,7 +1048,10 @@ final class DocumentSession: ObservableObject {
         do {
             let loaded = try loadAttributedString(from: url)
             let state = DocumentWorkspaceTabState(
-                title: url.deletingPathExtension().lastPathComponent,
+                title: resolvedDocumentTitle(
+                    loaded.documentTitle,
+                    fallback: url.deletingPathExtension().lastPathComponent
+                ),
                 attributedText: loaded.text,
                 currentURL: url,
                 currentType: loaded.type,
@@ -923,7 +1060,9 @@ final class DocumentSession: ObservableObject {
                 screenplayElement: loaded.mode == .screenplay ? .action : screenplayElement,
                 pageLayout: loaded.pageLayout,
                 hasUnsavedChanges: false,
-                editorLocation: EditorLocationSnapshot()
+                editorLocation: EditorLocationSnapshot(),
+                diskVersion: DocumentDiskVersion.capture(at: url),
+                screenplaySettings: loaded.screenplaySettings
             )
             installNewWorkspaceTab(state: state, reuseActiveTab: isCurrentTabPristine)
             trackRecent(url)
@@ -943,21 +1082,21 @@ final class DocumentSession: ObservableObject {
     }
 
     func saveDocument() {
-        if pageLayout.hasNativeOnlyFeatures,
+        if pageLayout.hasNativeOnlyFeatures || authoringMode == .screenplay,
            currentURL != nil,
            currentType != .mongrelDocument,
            currentType != .mongrelScreenplay {
             let alert = NSAlert()
             alert.alertStyle = .informational
-            alert.messageText = "Preserve page layout?"
-            alert.informativeText = "RTF, RTFD, Word, and plain-text exports do not retain Mongrel page colors, headers, or footers. Save a native Mongrel document to keep them editable."
+            alert.messageText = authoringMode == .screenplay ? "Preserve screenplay structure?" : "Preserve page layout?"
+            alert.informativeText = "RTF, RTFD, Word, and plain text do not retain Mongrel screenplay elements, draft settings, production scene identities, or page layout. Save a native Mongrel file to preserve this document."
             alert.addButton(withTitle: "Save as Mongrel Document")
-            alert.addButton(withTitle: "Save Without Page Layout")
+            alert.addButton(withTitle: "Save Without Mongrel Metadata")
             alert.addButton(withTitle: "Cancel")
 
             switch alert.runModal() {
             case .alertFirstButtonReturn:
-                saveDocumentAs(preferredType: .mongrelDocument)
+                saveDocumentAs(preferredType: authoringMode == .screenplay ? .mongrelScreenplay : .mongrelDocument)
             case .alertSecondButtonReturn:
                 if let currentURL {
                     writeDocument(to: currentURL, type: currentType)
@@ -979,7 +1118,7 @@ final class DocumentSession: ObservableObject {
         let panel = NSSavePanel()
         panel.allowedContentTypes = preferredType.map { [$0] } ?? Self.editableDocumentTypes
         panel.canCreateDirectories = true
-        let initialType = preferredType ?? currentType
+        let initialType = preferredType ?? (authoringMode == .screenplay ? .mongrelScreenplay : currentType)
         panel.nameFieldStringValue = suggestedFilename(for: initialType)
 
         guard panel.runModal() == .OK, let url = panel.url else {
@@ -1005,9 +1144,16 @@ final class DocumentSession: ObservableObject {
         }
 
         let type = documentType(for: url)
-        if writeDocument(to: url, type: type, shouldTrackAsCurrent: false) {
+        if saveDocumentCopy(to: url, type: type) {
             auditLogger.info("save_document_copy_success", metadata: ["file": url.lastPathComponent])
         }
+    }
+
+    /// Writes an untracked copy while protecting the backing file of the active tab.
+    @discardableResult
+    func saveDocumentCopy(to url: URL, type: UTType? = nil) -> Bool {
+        let resolvedType = type ?? documentType(for: url)
+        return writeDocument(to: url, type: resolvedType, shouldTrackAsCurrent: false)
     }
 
     /// Saves to a concrete URL without presenting a panel.
@@ -1278,6 +1424,15 @@ final class DocumentSession: ObservableObject {
         return cleaned.isEmpty ? "Untitled" : cleaned
     }
 
+    private func resolvedDocumentTitle(_ storedTitle: String?, fallback: String) -> String {
+        let trimmed = storedTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let placeholders = ["untitled", "untitled screenplay", "untitled source"]
+        guard !trimmed.isEmpty, !placeholders.contains(trimmed.lowercased()) else {
+            return fallback
+        }
+        return String(trimmed.prefix(240))
+    }
+
     private func documentType(for url: URL) -> UTType {
         switch url.pathExtension.lowercased() {
         case "mongreldoc": return .mongrelDocument
@@ -1306,7 +1461,9 @@ final class DocumentSession: ObservableObject {
         type: UTType,
         mode: AuthoringMode,
         codeLanguage: CodeLanguage?,
-        pageLayout: DocumentPageLayout
+        pageLayout: DocumentPageLayout,
+        documentTitle: String?,
+        screenplaySettings: ScreenplayDocumentSettings
     ) {
         if url.pathExtension.lowercased() == "mongreldoc" {
             let archive = try JSONDecoder().decode(
@@ -1318,7 +1475,9 @@ final class DocumentSession: ObservableObject {
                 .mongrelDocument,
                 archive.authoringMode,
                 archive.codeLanguage,
-                archive.pageLayout.sanitized
+                archive.pageLayout.sanitized,
+                archive.documentTitle,
+                archive.screenplaySettings ?? .init()
             )
         }
 
@@ -1332,7 +1491,9 @@ final class DocumentSession: ObservableObject {
                 .mongrelScreenplay,
                 .screenplay,
                 nil,
-                (archive.pageLayout ?? .empty).sanitized
+                (archive.pageLayout ?? .empty).sanitized,
+                archive.documentTitle,
+                archive.screenplaySettings ?? .init()
             )
         }
 
@@ -1342,7 +1503,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
             )
-            return (text, .rtf, .prose, nil, .empty)
+            return (text, .rtf, .prose, nil, .empty, nil, .init())
         }
 
         if url.pathExtension.lowercased() == "rtfd" {
@@ -1351,7 +1512,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.rtfd],
                 documentAttributes: nil
             )
-            return (text, .rtfd, .prose, nil, .empty)
+            return (text, .rtfd, .prose, nil, .empty, nil, .init())
         }
 
         if url.pathExtension.lowercased() == "docx" {
@@ -1360,7 +1521,7 @@ final class DocumentSession: ObservableObject {
                 options: [.documentType: NSAttributedString.DocumentType.officeOpenXML],
                 documentAttributes: nil
             )
-            return (text, .wordDocument, .prose, nil, .empty)
+            return (text, .wordDocument, .prose, nil, .empty, nil, .init())
         }
 
         let imported = try NSAttributedString(
@@ -1385,12 +1546,27 @@ final class DocumentSession: ObservableObject {
             detectedLanguage?.contentType ?? .plainText,
             detectedLanguage == nil ? .prose : .code,
             detectedLanguage,
-            .empty
+            .empty,
+            nil,
+            .init()
         )
     }
 
     @discardableResult
     private func writeDocument(to url: URL, type: UTType, shouldTrackAsCurrent: Bool = true) -> Bool {
+        updateMetrics()
+        if !shouldTrackAsCurrent, urlsReferToSameDocument(currentURL, url) {
+            presentError(
+                "Choose a Different Filename",
+                details: "A copy or export cannot replace the file backing the active tab. Choose another name or use Save."
+            )
+            auditLogger.warning(
+                "save_document_copy_conflict",
+                metadata: ["type": type.identifier, "file": url.lastPathComponent]
+            )
+            return false
+        }
+
         if let owner = workspaceTabs.first(where: { urlsReferToSameDocument($0.url, url) }),
            owner.id != activeTabID {
             presentError(
@@ -1399,6 +1575,21 @@ final class DocumentSession: ObservableObject {
             )
             auditLogger.warning(
                 "save_document_conflict",
+                metadata: ["type": type.identifier, "file": url.lastPathComponent]
+            )
+            return false
+        }
+
+        if shouldTrackAsCurrent,
+           urlsReferToSameDocument(currentURL, url),
+           let currentDiskVersion,
+           DocumentDiskVersion.capture(at: url) != currentDiskVersion {
+            presentError(
+                "File Changed on Disk",
+                details: "The file changed or disappeared after this tab opened. Use Save As to preserve this draft without erasing the other version."
+            )
+            auditLogger.warning(
+                "save_document_external_change_conflict",
                 metadata: ["type": type.identifier, "file": url.lastPathComponent]
             )
             return false
@@ -1417,13 +1608,23 @@ final class DocumentSession: ObservableObject {
                     attributedText: attributedText,
                     authoringMode: authoringMode,
                     codeLanguage: authoringMode == .code ? codeLanguage : nil,
-                    pageLayout: pageLayout
+                    pageLayout: pageLayout,
+                    documentTitle: resolvedDocumentTitle(
+                        title,
+                        fallback: url.deletingPathExtension().lastPathComponent
+                    ),
+                    screenplaySettings: screenplaySettings
                 ))
                 try data.write(to: url, options: .atomic)
             } else if type == .mongrelScreenplay {
                 let data = try JSONEncoder().encode(MongrelScreenplayArchive(
                     attributedText: attributedText,
-                    pageLayout: pageLayout
+                    pageLayout: pageLayout,
+                    documentTitle: resolvedDocumentTitle(
+                        title,
+                        fallback: url.deletingPathExtension().lastPathComponent
+                    ),
+                    screenplaySettings: screenplaySettings
                 ))
                 try data.write(to: url, options: .atomic)
             } else if type == .rtfd {
@@ -1449,10 +1650,17 @@ final class DocumentSession: ObservableObject {
             }
 
             if shouldTrackAsCurrent {
+                let savedTitle = type == .mongrelDocument || type == .mongrelScreenplay
+                    ? resolvedDocumentTitle(
+                        title,
+                        fallback: url.deletingPathExtension().lastPathComponent
+                    )
+                    : url.deletingPathExtension().lastPathComponent
                 applyProgrammaticState {
                     currentURL = url
                     currentType = type
-                    title = url.deletingPathExtension().lastPathComponent
+                    currentDiskVersion = DocumentDiskVersion.capture(at: url)
+                    title = savedTitle
                     hasUnsavedChanges = false
                 }
                 if let bookmarkData = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
@@ -1474,6 +1682,7 @@ final class DocumentSession: ObservableObject {
     }
 
     func makePDFData() -> Data? {
+        updateMetrics()
         let margins = authoringMode == .screenplay
             ? NSSize(width: ScreenplayPageLayout.horizontalInset, height: ScreenplayPageLayout.verticalInset)
             : NSSize(width: 36, height: 36)
@@ -1481,6 +1690,7 @@ final class DocumentSession: ObservableObject {
             attributedText,
             margins: margins,
             fallbackPageNumbers: authoringMode == .screenplay,
+            numberedScenes: authoringMode == .screenplay && screenplaySettings.showsSceneNumbers ? screenplayScenes : [],
             title: title,
             pageLayout: pageLayout
         )
@@ -1560,12 +1770,14 @@ final class DocumentSession: ObservableObject {
     private func activateWorkspaceTab(_ id: UUID, autosaveCurrent: Bool) {
         guard id != activeTabID,
               workspaceTabs.contains(where: { $0.id == id }),
-              let state = workspaceTabStates[id] else { return }
+              var state = workspaceTabStates[id] else { return }
 
         if autosaveCurrent {
             autosaveCurrentTabIfNeeded()
         }
         syncActiveTabState()
+        state = reconciledCleanNamedState(state)
+        workspaceTabStates[id] = state
         activeTabID = id
         loadWorkspaceState(state)
         refreshActiveTabMetadata()
@@ -1621,8 +1833,67 @@ final class DocumentSession: ObservableObject {
         url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
+    private func reconciledCleanNamedState(_ state: DocumentWorkspaceTabState) -> DocumentWorkspaceTabState {
+        guard !state.hasUnsavedChanges, let url = state.currentURL else { return state }
+        guard let diskVersion = DocumentDiskVersion.capture(at: url) else {
+            auditLogger.warning("workspace_tab_backing_file_unavailable", metadata: ["file": url.lastPathComponent])
+            return detachedRecoveredState(from: state)
+        }
+        guard diskVersion != state.diskVersion else { return state }
+
+        let didAccessSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccessSecurityScope {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let loaded = try loadAttributedString(from: url)
+            auditLogger.info("workspace_tab_reloaded_external_change", metadata: ["file": url.lastPathComponent])
+            return DocumentWorkspaceTabState(
+                title: resolvedDocumentTitle(
+                    loaded.documentTitle,
+                    fallback: url.deletingPathExtension().lastPathComponent
+                ),
+                attributedText: loaded.text,
+                currentURL: url,
+                currentType: loaded.type,
+                authoringMode: loaded.mode,
+                codeLanguage: loaded.codeLanguage ?? state.codeLanguage,
+                screenplayElement: loaded.mode == .screenplay ? state.screenplayElement : .action,
+                pageLayout: loaded.pageLayout,
+                hasUnsavedChanges: false,
+                editorLocation: state.editorLocation,
+                diskVersion: diskVersion,
+                screenplaySettings: loaded.screenplaySettings
+            )
+        } catch {
+            auditLogger.error(
+                "workspace_tab_external_reload_failed",
+                error: error,
+                metadata: ["file": url.lastPathComponent]
+            )
+            return detachedRecoveredState(from: state)
+        }
+    }
+
+    private func detachedRecoveredState(from state: DocumentWorkspaceTabState) -> DocumentWorkspaceTabState {
+        var recovered = state
+        recovered.title = recoveredTitle(for: state.title)
+        recovered.currentURL = nil
+        recovered.diskVersion = nil
+        recovered.hasUnsavedChanges = true
+        return recovered
+    }
+
+    private func recoveredTitle(for title: String) -> String {
+        title.hasSuffix(" (Recovered)") ? title : "\(title) (Recovered)"
+    }
+
     private func scheduleWorkspaceRecovery() {
         guard !isSwitchingTabs else { return }
+        if let activeTabID { recoveryArchiveCache.removeValue(forKey: activeTabID) }
         workspaceRecoveryWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             self?.workspaceRecoveryWorkItem = nil
@@ -1633,13 +1904,18 @@ final class DocumentSession: ObservableObject {
     }
 
     private func persistWorkspaceRecovery() {
+        updateMetrics()
         syncActiveTabState()
+        let openIDs = Set(workspaceTabs.map(\.id))
+        recoveryArchiveCache = recoveryArchiveCache.filter { openIDs.contains($0.key) }
 
         if workspaceTabs.count == 1,
            let onlyTab = workspaceTabs.first,
            let onlyState = workspaceTabStates[onlyTab.id],
            isPristineWorkspaceState(onlyState) {
             do {
+                // A queued save must finish before clearing a now-pristine workspace.
+                recoveryWriter.flush()
                 try workspaceRecoveryStore.clear()
             } catch {
                 auditLogger.error("workspace_recovery_clear_failed", error: error)
@@ -1652,14 +1928,16 @@ final class DocumentSession: ObservableObject {
                 guard let state = workspaceTabStates[tab.id] else {
                     throw WorkspaceRecoveryError.missingTabState
                 }
-                return try WorkspaceRecoveryTab(tab: tab, state: state)
+                let recovered = try WorkspaceRecoveryTab(tab: tab, state: state, cachedArchive: recoveryArchiveCache[tab.id])
+                recoveryArchiveCache[tab.id] = recovered.archive
+                return recovered
             }
             let manifest = WorkspaceRecoveryManifest(
                 activeTabID: activeTabID,
                 tabs: recoveredTabs
             )
-            try workspaceRecoveryStore.save(JSONEncoder().encode(manifest))
-            auditLogger.info("workspace_recovery_saved", metadata: ["tabs": recoveredTabs.count])
+            let write = WorkspaceRecoveryWrite(manifest: manifest, store: workspaceRecoveryStore, logger: auditLogger)
+            recoveryWriter.enqueue { write.perform() }
         } catch {
             auditLogger.error("workspace_recovery_save_failed", error: error)
         }
@@ -1687,8 +1965,10 @@ final class DocumentSession: ObservableObject {
                         throw WorkspaceRecoveryError.duplicateDocument
                     }
                 }
-                restoredTabs.append(workspaceTab(from: state, id: recoveredTab.id))
-                restoredStates[recoveredTab.id] = state
+                // A damaged manifest must not make two tabs share one mutable state.
+                let id = restoredStates[recoveredTab.id] == nil ? recoveredTab.id : UUID()
+                restoredTabs.append(workspaceTab(from: state, id: id))
+                restoredStates[id] = state
             }
 
             workspaceTabs = restoredTabs
@@ -1716,6 +1996,7 @@ final class DocumentSession: ObservableObject {
     private func makeWorkspaceState(from recoveredTab: WorkspaceRecoveryTab) throws -> DocumentWorkspaceTabState {
         let resolvedURL = recoveredTab.resolveURL()
         let fileExists = resolvedURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        var backingFileUnreadable = false
 
         if !recoveredTab.isDirty, let resolvedURL, fileExists {
             let didAccessSecurityScope = resolvedURL.startAccessingSecurityScopedResource()
@@ -1726,7 +2007,10 @@ final class DocumentSession: ObservableObject {
             }
             if let loaded = try? loadAttributedString(from: resolvedURL) {
                 return DocumentWorkspaceTabState(
-                    title: resolvedURL.deletingPathExtension().lastPathComponent,
+                    title: resolvedDocumentTitle(
+                        loaded.documentTitle,
+                        fallback: resolvedURL.deletingPathExtension().lastPathComponent
+                    ),
                     attributedText: loaded.text,
                     currentURL: resolvedURL,
                     currentType: loaded.type,
@@ -1735,12 +2019,15 @@ final class DocumentSession: ObservableObject {
                     screenplayElement: recoveredTab.screenplayElement,
                     pageLayout: loaded.pageLayout,
                     hasUnsavedChanges: false,
-                    editorLocation: recoveredTab.editorLocation
+                    editorLocation: recoveredTab.editorLocation,
+                    diskVersion: DocumentDiskVersion.capture(at: resolvedURL),
+                    screenplaySettings: loaded.screenplaySettings
                 )
             }
+            backingFileUnreadable = true
         }
 
-        let namedFileUnavailable = recoveredTab.filePath != nil && !fileExists
+        let namedFileUnavailable = recoveredTab.filePath != nil && (!fileExists || backingFileUnreadable)
         let diskVersionChanged = recoveredTab.isDirty
             && fileExists
             && resolvedURL.map { !recoveredTab.matchesDiskVersion(at: $0) } == true
@@ -1755,7 +2042,7 @@ final class DocumentSession: ObservableObject {
         return DocumentWorkspaceTabState(
             title: recoveredTitle,
             attributedText: try recoveredTab.archive.makeAttributedString(),
-            currentURL: fileExists && !diskVersionChanged ? resolvedURL : nil,
+            currentURL: fileExists && !backingFileUnreadable && !diskVersionChanged ? resolvedURL : nil,
             currentType: UTType(recoveredTab.currentTypeIdentifier)
                 ?? defaultDocumentType(for: recoveredTab.authoringMode),
             authoringMode: recoveredTab.authoringMode,
@@ -1763,7 +2050,11 @@ final class DocumentSession: ObservableObject {
             screenplayElement: recoveredTab.screenplayElement,
             pageLayout: recoveredTab.archive.pageLayout.sanitized,
             hasUnsavedChanges: recoveredTab.isDirty || namedFileUnavailable,
-            editorLocation: recoveredTab.editorLocation
+            editorLocation: recoveredTab.editorLocation,
+            diskVersion: fileExists && !backingFileUnreadable && !diskVersionChanged
+                ? resolvedURL.flatMap { DocumentDiskVersion.capture(at: $0) }
+                : nil,
+            screenplaySettings: recoveredTab.archive.screenplaySettings ?? .init()
         )
     }
 
@@ -1771,7 +2062,7 @@ final class DocumentSession: ObservableObject {
         guard autosaveOnTabSwitch,
               hasUnsavedChanges,
               let currentURL else { return }
-        let wouldDropNativeLayout = pageLayout.hasNativeOnlyFeatures
+        let wouldDropNativeLayout = (pageLayout.hasNativeOnlyFeatures || authoringMode == .screenplay)
             && currentType != .mongrelDocument
             && currentType != .mongrelScreenplay
         guard !wouldDropNativeLayout else { return }
@@ -1789,7 +2080,9 @@ final class DocumentSession: ObservableObject {
             screenplayElement: screenplayElement,
             pageLayout: pageLayout,
             hasUnsavedChanges: hasUnsavedChanges,
-            editorLocation: formattingBridge.captureEditorLocation()
+            editorLocation: formattingBridge.captureEditorLocation(),
+            diskVersion: currentDiskVersion,
+            screenplaySettings: screenplaySettings
         )
     }
 
@@ -1803,16 +2096,21 @@ final class DocumentSession: ObservableObject {
     }
 
     private func loadWorkspaceState(_ state: DocumentWorkspaceTabState) {
+        metricsWorkItem?.cancel()
+        metricsWorkItem = nil
         isSwitchingTabs = true
+        screenplayCursorLocation = state.editorLocation.selection.location
         applyProgrammaticState {
             title = state.title
             attributedText = state.attributedText.copy() as? NSAttributedString ?? state.attributedText
             currentURL = state.currentURL
             currentType = state.currentType
+            currentDiskVersion = state.diskVersion
             authoringMode = state.authoringMode
             codeLanguage = state.codeLanguage
             screenplayElement = state.screenplayElement
             pageLayout = state.pageLayout
+            screenplaySettings = state.screenplaySettings
             hasUnsavedChanges = state.hasUnsavedChanges
             codeCursorLine = 1
             codeCursorColumn = 1
@@ -1856,8 +2154,8 @@ final class DocumentSession: ObservableObject {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "You have unsaved changes"
-        alert.informativeText = "Do you want to save before continuing?"
+        alert.messageText = "Save changes to “\(title)”?"
+        alert.informativeText = "Save this document before closing its tab."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Discard")
         alert.addButton(withTitle: "Cancel")
@@ -1889,18 +2187,74 @@ final class DocumentSession: ObservableObject {
 extension DocumentSession {
 
     private func updateMetrics() {
+        metricsWorkItem?.cancel()
+        metricsWorkItem = nil
+        guard lastMetricsText !== attributedText || lastMetricsMode != authoringMode
+                || lastMetricsDraft != screenplaySettings.draft else { return }
         let text = attributedText.string
         let words = text.split(whereSeparator: \.isWhitespace).filter { !$0.isEmpty }
         wordCount = words.count
         charCount = text.filter { !$0.isWhitespace && !$0.isNewline }.count
-        screenplayPageCount = estimateScreenplayPageCount()
-        screenplayScenes = collectScreenplayScenes()
+        let scenes = collectScreenplayScenes()
+        screenplayScenes = reconcileProductionScenes(scenes)
         screenplaySceneCount = screenplayScenes.count
+        updateScreenplayCursor(location: screenplayCursorLocation)
+        if authoringMode != .screenplay || formattingBridge.textView == nil {
+            screenplayPageCount = estimateScreenplayPageCount()
+        }
+        screenplayCatalog = authoringMode == .screenplay ? ScreenplayCatalog.analyze(attributedText) : .init()
+        formattingBridge.documentCatalog = screenplayCatalog
         documentInsights = DocumentInsightsAnalyzer.analyze(
             attributedText,
             scenes: screenplayScenes,
             mode: authoringMode
         )
+        lastMetricsText = attributedText
+        lastMetricsMode = authoringMode
+        lastMetricsDraft = screenplaySettings.draft
+    }
+
+    private func reconcileProductionScenes(_ scenes: [ScreenplayScene]) -> [ScreenplayScene] {
+        guard authoringMode == .screenplay, screenplaySettings.draft == .production else { return scenes }
+        var records = screenplaySettings.sceneRecords
+        let initial = records.isEmpty
+        var reserved = Set(records.map(\.number))
+        var seen = Set<String>()
+        var previous: String?
+        let text = NSMutableAttributedString(attributedString: attributedText)
+        var changed = false
+        var result: [ScreenplayScene] = []
+        for var scene in scenes {
+            var identity = text.attribute(.screenplaySceneIdentity, at: scene.location, effectiveRange: nil) as? String
+            if identity == nil || seen.contains(identity!) {
+                identity = UUID().uuidString
+                let range = (text.string as NSString).paragraphRange(for: NSRange(location: scene.location, length: 0))
+                text.addAttribute(.screenplaySceneIdentity, value: identity!, range: range)
+                changed = true
+            }
+            seen.insert(identity!)
+            if let index = records.firstIndex(where: { $0.id == identity }) {
+                records[index].heading = scene.heading
+                records[index].isOmitted = false
+                scene.productionNumber = records[index].number
+            } else {
+                let number = ScreenplayProductionNumbering.nextNumber(after: previous, reserved: reserved, initial: initial)
+                records.append(ScreenplayProductionScene(id: identity!, number: number, heading: scene.heading, isOmitted: false))
+                reserved.insert(number)
+                scene.productionNumber = number
+            }
+            previous = scene.productionNumber
+            result.append(scene)
+        }
+        for index in records.indices { records[index].isOmitted = !seen.contains(records[index].id) }
+        if changed || records != screenplaySettings.sceneRecords {
+            let wasApplying = isApplyingProgrammaticState
+            isApplyingProgrammaticState = true
+            screenplaySettings.sceneRecords = records
+            if changed { attributedText = text }
+            isApplyingProgrammaticState = wasApplying
+        }
+        return result
     }
 
     private func estimateScreenplayPageCount() -> Int {
@@ -2059,10 +2413,15 @@ struct MongrelDocumentArchive: Codable {
 
     let formatVersion: Int
     let richTextData: Data
+    let preservedCharacters: [NativePreservedCharacter]?
     let mode: String
     let codeLanguageName: String?
     let pageLayout: DocumentPageLayout
     let elementRanges: [ElementRange]
+    let documentTitle: String?
+    let screenplaySettings: ScreenplayDocumentSettings?
+    let sceneIdentityRanges: [ScreenplaySceneIdentityRange]?
+    let manualElementRanges: [ScreenplaySceneIdentityRange]?
 
     var authoringMode: AuthoringMode {
         AuthoringMode(rawValue: mode) ?? .prose
@@ -2076,16 +2435,21 @@ struct MongrelDocumentArchive: Codable {
         attributedText: NSAttributedString,
         authoringMode: AuthoringMode,
         codeLanguage: CodeLanguage? = nil,
-        pageLayout: DocumentPageLayout
+        pageLayout: DocumentPageLayout,
+        documentTitle: String? = nil,
+        screenplaySettings: ScreenplayDocumentSettings? = nil
     ) throws {
-        formatVersion = 1
-        richTextData = try attributedText.data(
-            from: NSRange(location: 0, length: attributedText.length),
-            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd]
-        )
+        formatVersion = 2
+        let encoded = try NativeRichTextCodec.encode(attributedText, type: .rtfd)
+        richTextData = encoded.0
+        preservedCharacters = encoded.1
         mode = authoringMode.rawValue
         codeLanguageName = codeLanguage?.rawValue
         self.pageLayout = pageLayout
+        self.documentTitle = documentTitle
+        self.screenplaySettings = screenplaySettings
+        self.sceneIdentityRanges = ScreenplaySceneIdentityRange.collect(from: attributedText)
+        self.manualElementRanges = ScreenplaySceneIdentityRange.collect(from: attributedText, key: .screenplayManualElement)
 
         var ranges: [ElementRange] = []
         attributedText.enumerateAttribute(
@@ -2100,7 +2464,7 @@ struct MongrelDocumentArchive: Codable {
     }
 
     func makeAttributedString() throws -> NSAttributedString {
-        guard formatVersion == 1 else {
+        guard (1...2).contains(formatVersion) else {
             throw CocoaError(.fileReadUnsupportedScheme)
         }
         let restored = try NSMutableAttributedString(
@@ -2108,6 +2472,7 @@ struct MongrelDocumentArchive: Codable {
             options: [.documentType: NSAttributedString.DocumentType.rtfd],
             documentAttributes: nil
         )
+        NativeRichTextCodec.restorePlaceholders(preservedCharacters, in: restored)
         for elementRange in elementRanges {
             guard ScreenplayElement(rawValue: elementRange.element) != nil,
                   elementRange.location >= 0,
@@ -2120,6 +2485,8 @@ struct MongrelDocumentArchive: Codable {
                 range: NSRange(location: elementRange.location, length: elementRange.length)
             )
         }
+        ScreenplaySceneIdentityRange.restore(sceneIdentityRanges, to: restored)
+        ScreenplaySceneIdentityRange.restore(manualElementRanges, to: restored, key: .screenplayManualElement)
         return restored
     }
 }
@@ -2133,15 +2500,26 @@ private struct MongrelScreenplayArchive: Codable {
 
     let formatVersion: Int
     let richTextData: Data
+    let richTextFormat: String?
+    let preservedCharacters: [NativePreservedCharacter]?
     let elementRanges: [ElementRange]
     let pageLayout: DocumentPageLayout?
+    let documentTitle: String?
+    let screenplaySettings: ScreenplayDocumentSettings?
+    let sceneIdentityRanges: [ScreenplaySceneIdentityRange]?
+    let manualElementRanges: [ScreenplaySceneIdentityRange]?
 
-    init(attributedText: NSAttributedString, pageLayout: DocumentPageLayout = .empty) throws {
-        formatVersion = 1
-        richTextData = try attributedText.data(
-            from: NSRange(location: 0, length: attributedText.length),
-            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        )
+    init(
+        attributedText: NSAttributedString,
+        pageLayout: DocumentPageLayout = .empty,
+        documentTitle: String? = nil,
+        screenplaySettings: ScreenplayDocumentSettings? = nil
+    ) throws {
+        formatVersion = 2
+        let encoded = try NativeRichTextCodec.encode(attributedText, type: .rtfd)
+        richTextData = encoded.0
+        preservedCharacters = encoded.1
+        richTextFormat = "rtfd"
 
         var ranges: [ElementRange] = []
         attributedText.enumerateAttribute(
@@ -2154,18 +2532,23 @@ private struct MongrelScreenplayArchive: Codable {
         }
         elementRanges = ranges
         self.pageLayout = pageLayout
+        self.documentTitle = documentTitle
+        self.screenplaySettings = screenplaySettings
+        self.sceneIdentityRanges = ScreenplaySceneIdentityRange.collect(from: attributedText)
+        self.manualElementRanges = ScreenplaySceneIdentityRange.collect(from: attributedText, key: .screenplayManualElement)
     }
 
     func makeAttributedString() throws -> NSAttributedString {
-        guard formatVersion == 1 else {
+        guard (1...2).contains(formatVersion) else {
             throw CocoaError(.fileReadUnsupportedScheme)
         }
 
         let restored = try NSMutableAttributedString(
             data: richTextData,
-            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            options: [.documentType: richTextFormat == "rtfd" ? NSAttributedString.DocumentType.rtfd : .rtf],
             documentAttributes: nil
         )
+        NativeRichTextCodec.restorePlaceholders(preservedCharacters, in: restored)
         for elementRange in elementRanges {
             guard ScreenplayElement(rawValue: elementRange.element) != nil,
                   elementRange.location >= 0,
@@ -2178,6 +2561,8 @@ private struct MongrelScreenplayArchive: Codable {
                 range: NSRange(location: elementRange.location, length: elementRange.length)
             )
         }
+        ScreenplaySceneIdentityRange.restore(sceneIdentityRanges, to: restored)
+        ScreenplaySceneIdentityRange.restore(manualElementRanges, to: restored, key: .screenplayManualElement)
         return restored
     }
 }
@@ -2188,6 +2573,7 @@ private enum PaginatedDocumentPDFRenderer {
         _ attributedText: NSAttributedString,
         margins: NSSize,
         fallbackPageNumbers: Bool,
+        numberedScenes: [ScreenplayScene],
         title: String,
         pageLayout: DocumentPageLayout
     ) -> Data? {
@@ -2240,6 +2626,7 @@ private enum PaginatedDocumentPDFRenderer {
                 pageNumber: index + 1,
                 pageCount: containers.count,
                 fallbackPageNumbers: fallbackPageNumbers,
+                numberedScenes: numberedScenes,
                 title: title,
                 pageLayout: pageLayout
             )
@@ -2260,6 +2647,7 @@ private final class DocumentPDFPageView: NSView {
     private let pageNumber: Int
     private let pageCount: Int
     private let fallbackPageNumbers: Bool
+    private let numberedScenes: [ScreenplayScene]
     private let title: String
     private let pageLayout: DocumentPageLayout
 
@@ -2272,6 +2660,7 @@ private final class DocumentPDFPageView: NSView {
         pageNumber: Int,
         pageCount: Int,
         fallbackPageNumbers: Bool,
+        numberedScenes: [ScreenplayScene],
         title: String,
         pageLayout: DocumentPageLayout
     ) {
@@ -2282,6 +2671,7 @@ private final class DocumentPDFPageView: NSView {
         self.pageNumber = pageNumber
         self.pageCount = pageCount
         self.fallbackPageNumbers = fallbackPageNumbers
+        self.numberedScenes = numberedScenes
         self.title = title
         self.pageLayout = pageLayout
         super.init(frame: frame)
@@ -2302,6 +2692,18 @@ private final class DocumentPDFPageView: NSView {
         let origin = NSPoint(x: horizontalMargin, y: contentTopInset)
         layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
         layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+        let numberAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: pageLayout.pageColors.text.nsColor
+        ]
+        for scene in numberedScenes {
+            let glyph = layoutManager.glyphIndexForCharacter(at: scene.location)
+            guard NSLocationInRange(glyph, glyphRange) else { continue }
+            let rect = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let y = rect.minY + origin.y
+            scene.displayNumber.draw(at: NSPoint(x: 40, y: y), withAttributes: numberAttributes)
+            scene.displayNumber.draw(at: NSPoint(x: bounds.width - 64, y: y), withAttributes: numberAttributes)
+        }
 
         let shouldDrawFurniture = pageNumber > 1 || pageLayout.showsOnFirstPage
         if shouldDrawFurniture {

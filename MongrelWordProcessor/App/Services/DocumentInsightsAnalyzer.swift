@@ -102,7 +102,7 @@ enum DocumentInsightsAnalyzer {
             if element == .dialogue {
                 dialogueWords += value.split(whereSeparator: \.isWhitespace).count
             } else if element == .character, !value.isEmpty {
-                characterCounts[value, default: 0] += 1
+                characterCounts[ScreenplayCatalog.canonicalCharacterName(value), default: 0] += 1
             }
             location = NSMaxRange(range)
         }
@@ -117,7 +117,7 @@ enum DocumentInsightsAnalyzer {
             return lhs.cueCount > rhs.cueCount
         }
 
-        return (dialogueWords, Array(sortedCharacters.prefix(8)))
+        return (dialogueWords, sortedCharacters)
     }
 
     private static func sample(_ values: [Int], limit: Int) -> [Int] {
