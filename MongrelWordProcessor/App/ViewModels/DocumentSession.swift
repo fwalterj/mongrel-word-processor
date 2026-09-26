@@ -943,10 +943,15 @@ final class DocumentSession: ObservableObject {
     }
 
     func adjustEditorZoom(by delta: CGFloat) {
+        guard delta.isFinite else { return }
+        var current = editorZoom
         if authoringMode == .screenplay {
+            if screenplayViewStyle.usesAutomaticZoom {
+                current = formattingBridge.textView?.enclosingScrollView?.magnification ?? editorZoom
+            }
             screenplayViewStyle = .page
         }
-        setEditorZoom(editorZoom + delta)
+        setEditorZoom(current + delta)
     }
 
     func resetEditorZoom() {
@@ -957,6 +962,8 @@ final class DocumentSession: ObservableObject {
     }
 
     func setEditorZoom(_ zoom: CGFloat) {
+        guard zoom.isFinite else { return }
+        formattingBridge.focusEditor(revealSelection: false)
         let clamped = min(max(zoom, 0.6), 2)
         guard abs(clamped - editorZoom) > 0.001 else { return }
         editorZoom = clamped
@@ -1995,16 +2002,14 @@ final class DocumentSession: ObservableObject {
 
     private func makeWorkspaceState(from recoveredTab: WorkspaceRecoveryTab) throws -> DocumentWorkspaceTabState {
         let resolvedURL = recoveredTab.resolveURL()
+        // Even checking existence and disk identity needs the resolved grant.
+        // Keep it active for clean reloads and dirty-draft conflict checks alike.
+        let didAccessSecurityScope = resolvedURL?.startAccessingSecurityScopedResource() ?? false
+        defer { if didAccessSecurityScope { resolvedURL?.stopAccessingSecurityScopedResource() } }
         let fileExists = resolvedURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         var backingFileUnreadable = false
 
         if !recoveredTab.isDirty, let resolvedURL, fileExists {
-            let didAccessSecurityScope = resolvedURL.startAccessingSecurityScopedResource()
-            defer {
-                if didAccessSecurityScope {
-                    resolvedURL.stopAccessingSecurityScopedResource()
-                }
-            }
             if let loaded = try? loadAttributedString(from: resolvedURL) {
                 return DocumentWorkspaceTabState(
                     title: resolvedDocumentTitle(
@@ -2348,24 +2353,10 @@ extension DocumentSession {
     }
 
     private func paragraphCountsAsScene(at location: Int, text: String) -> Bool {
-        if screenplayElement(at: location) == .sceneHeading {
-            return true
+        if let element = ScreenplayCatalog.elementTag(in: attributedText, at: location) {
+            return element == .sceneHeading
         }
-
-        let normalized = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        guard !normalized.isEmpty else { return false }
-
-        let sceneHeadingPrefixes = [
-            "INT.", "EXT.", "INT/EXT.", "INT./EXT.", "EXT./INT.", "I/E.", "EST."
-        ]
-        return sceneHeadingPrefixes.contains { prefix in
-            guard normalized.hasPrefix(prefix) else { return false }
-            guard normalized.count > prefix.count else { return true }
-            let boundary = normalized.index(normalized.startIndex, offsetBy: prefix.count)
-            return normalized[boundary].isWhitespace
-        }
+        return ScreenplayCatalog.isSceneHeading(text)
     }
 
     private func loadRecentDocuments() {

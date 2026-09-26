@@ -804,6 +804,279 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(reported.length, 2)
     }
 
+    func testZoomAndResizeReflowProseAndCodeWithoutMovingTheReadingAnchor() throws {
+        for mode in [AuthoringMode.prose, .code] {
+            let harness = makeHarness(authoringMode: mode, useTextKit2: true)
+            let (window, viewport) = makeViewport(for: harness.textView)
+            defer { window.close() }
+            harness.textView.string = (1...80).map { "Paragraph \($0). " + String(repeating: "The city waited for the rain. ", count: 8) + "\n\n" }.joined()
+            harness.coordinator.applyEditorMode(mode, to: harness.textView)
+            viewport.synchronizeDocumentGeometry()
+            let location = (harness.textView.string as NSString).range(of: "Paragraph 12.").location + 14
+            let selection = NSRange(location: location, length: 8)
+            harness.textView.setSelectedRange(selection)
+            harness.textView.scrollRangeToVisible(selection)
+            let original = NSAttributedString(attributedString: harness.textView.attributedString())
+            let anchor = try XCTUnwrap(viewport.captureAnchor())
+            for scale: CGFloat in [1.4, 2, 0.6, 1] {
+                viewport.setEditorMagnification(scale)
+                XCTAssertEqual(harness.textView.frame.width, viewport.documentVisibleRect.width, accuracy: 1)
+                XCTAssertEqual(viewport.documentVisibleRect.minX, 0, accuracy: 1)
+                XCTAssertEqual(harness.textView.selectedRange(), selection)
+                let usage = try XCTUnwrap(harness.textView.textLayoutManager).usageBoundsForTextContainer
+                XCTAssertGreaterThanOrEqual(harness.textView.frame.height, usage.maxY + harness.textView.textContainerInset.height * 2 - 1)
+                let current = try XCTUnwrap(viewport.captureAnchor())
+                XCTAssertEqual(current.location, anchor.location)
+                XCTAssertEqual(current.viewportOffset.y, anchor.viewportOffset.y, accuracy: 3)
+                XCTAssertTrue(harness.textView.attributedString().isEqual(to: original))
+            }
+            for width: CGFloat in [420, 900, 600] {
+                viewport.setFrameSize(NSSize(width: width, height: 420))
+                XCTAssertEqual(harness.textView.frame.width, viewport.documentVisibleRect.width, accuracy: 1)
+                XCTAssertEqual(try XCTUnwrap(viewport.captureAnchor()).viewportOffset.y, anchor.viewportOffset.y, accuracy: 3)
+                XCTAssertEqual(harness.textView.selectedRange(), selection)
+            }
+        }
+    }
+
+    func testZoomPreservesOffscreenSelectionAndAnchorsTheVisibleParagraph() throws {
+        let harness = makeHarness(authoringMode: .prose, useTextKit2: true)
+        let (window, viewport) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        harness.textView.string = String(repeating: "A long paragraph with enough words to wrap over several lines.\n\n", count: 200)
+        viewport.synchronizeDocumentGeometry()
+        harness.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        viewport.contentView.scroll(to: NSPoint(x: 0, y: 900))
+        let anchor = try XCTUnwrap(viewport.captureAnchor())
+        XCTAssertGreaterThan(anchor.location, 0)
+        viewport.setEditorMagnification(1.4)
+        let restored = try XCTUnwrap(viewport.captureAnchor())
+        XCTAssertEqual((harness.textView.string as NSString).paragraphRange(for: NSRange(location: restored.location, length: 0)),
+                       (harness.textView.string as NSString).paragraphRange(for: NSRange(location: anchor.location, length: 0)))
+        XCTAssertEqual(harness.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func testReturningFocusForZoomPreservesAnOffscreenSelection() throws {
+        let harness = makeHarness(authoringMode: .prose, useTextKit2: true)
+        let (window, viewport) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        harness.textView.string = String(repeating: "A paragraph with enough words to wrap across lines.\n\n", count: 200)
+        viewport.synchronizeDocumentGeometry()
+        harness.textView.setSelectedRange(NSRange(location: 0, length: 4))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 20))
+        window.contentView?.addSubview(field)
+        window.makeFirstResponder(field)
+        viewport.contentView.scroll(to: NSPoint(x: 0, y: 900))
+        let anchor = try XCTUnwrap(viewport.captureAnchor())
+        harness.bridge.focusEditor(revealSelection: false)
+        XCTAssertTrue(window.firstResponder === harness.textView)
+        XCTAssertEqual(harness.textView.selectedRange(), NSRange(location: 0, length: 4))
+        let restored = try XCTUnwrap(viewport.captureAnchor())
+        XCTAssertEqual(restored.location, anchor.location)
+        XCTAssertEqual(restored.viewportOffset.y, anchor.viewportOffset.y, accuracy: 1)
+    }
+
+    func testNoWrapCanReturnToWrappingAfterMagnificationAndLongLine() throws {
+        let harness = makeHarness(authoringMode: .code, useTextKit2: true)
+        let (window, viewport) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        harness.textView.string = String(repeating: "let value = 123; ", count: 200)
+        harness.coordinator.applyLineWrap(false, to: viewport)
+        viewport.setEditorMagnification(1.6)
+        XCTAssertGreaterThan(harness.textView.frame.width, viewport.documentVisibleRect.width)
+        XCTAssertTrue(viewport.hasHorizontalScroller)
+        harness.coordinator.applyLineWrap(true, to: viewport)
+        XCTAssertEqual(harness.textView.frame.width, viewport.documentVisibleRect.width, accuracy: 1)
+        XCTAssertEqual(viewport.documentVisibleRect.minX, 0, accuracy: 1)
+        XCTAssertFalse(viewport.hasHorizontalScroller)
+        harness.textView.string = ""
+        viewport.setEditorMagnification(0.6)
+        viewport.setFrameSize(NSSize(width: 380, height: 250))
+        XCTAssertEqual(harness.textView.frame.width, viewport.documentVisibleRect.width, accuracy: 1)
+    }
+
+    func testScreenplayZoomKeepsPageCountAndPrintGeometryUnchanged() throws {
+        let harness = makeHarness(useTextKit2: true)
+        let (window, viewport) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        harness.coordinator.applyEditorMode(.screenplay, to: harness.textView)
+        harness.textView.insertText(String(repeating: "INT. ROOM - DAY\n\nThe city waited for the rain.\n\n", count: 45), replacementRange: NSRange(location: 0, length: 0))
+        harness.coordinator.updateScreenplayPagination(for: harness.textView)
+        let editor = try XCTUnwrap(harness.textView as? ScreenplayTextView)
+        let pages = editor.screenplayPageCount
+        let original = NSAttributedString(attributedString: editor.attributedString())
+        XCTAssertGreaterThan(pages, 1)
+        for scale: CGFloat in [0.6, 1.4, 2, 1] {
+            viewport.setEditorMagnification(scale)
+            harness.coordinator.updateScreenplayPagination(for: editor)
+            XCTAssertEqual(editor.frame.width, ScreenplayPageLayout.pageSize.width, accuracy: 0.01)
+            XCTAssertEqual(editor.textContainer!.containerSize.width, ScreenplayPageLayout.contentWidth, accuracy: 0.01)
+            XCTAssertEqual(editor.screenplayPageCount, pages)
+            XCTAssertTrue(editor.attributedString().isEqual(to: original))
+        }
+    }
+
+    func testFontSizeActionRestoresFocusPreservesSelectionAndUndoesSeparately() throws {
+        let harness = makeHarness(authoringMode: .prose, useTextKit2: true)
+        let (window, _) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        let editor = harness.textView
+        editor.allowsUndo = true
+        let undo = try XCTUnwrap(editor.undoManager)
+        undo.groupsByEvent = false
+        undo.beginUndoGrouping()
+        editor.insertText("First second", replacementRange: NSRange(location: 0, length: 0))
+        undo.endUndoGrouping()
+        let selection = NSRange(location: 0, length: 5)
+        editor.setSelectedRange(selection)
+        let original = try XCTUnwrap(editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 20))
+        window.contentView?.addSubview(field)
+        window.makeFirstResponder(field)
+        undo.beginUndoGrouping()
+        harness.bridge.increaseFontSize()
+        undo.endUndoGrouping()
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(editor.selectedRange(), selection)
+        XCTAssertEqual(try XCTUnwrap(editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont).pointSize, original.pointSize + 1, accuracy: 0.01)
+        undo.undo()
+        XCTAssertEqual(editor.string, "First second")
+        XCTAssertEqual(try XCTUnwrap(editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont).pointSize, original.pointSize, accuracy: 0.01)
+        undo.redo()
+        XCTAssertEqual(try XCTUnwrap(editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont).pointSize, original.pointSize + 1, accuracy: 0.01)
+        undo.undo()
+        undo.undo()
+        XCTAssertEqual(editor.string, "")
+        undo.beginUndoGrouping()
+        editor.insertText("New branch", replacementRange: NSRange(location: 0, length: 0))
+        undo.endUndoGrouping()
+        XCTAssertFalse(undo.canRedo)
+    }
+
+    func testExternalScreenplayPasteUsesDestinationElementAndSingleUndo() throws {
+        let harness = makeHarness(useTextKit2: true)
+        let editor = try XCTUnwrap(harness.textView as? ScreenplayTextView)
+        editor.allowsUndo = true
+        editor.string = "Before after"
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+        harness.bridge.applyScreenplayElement(.dialogue)
+        editor.setSelectedRange(NSRange(location: 7, length: 0))
+        let original = NSAttributedString(attributedString: editor.attributedString())
+        let clipboard = NSPasteboard(name: NSPasteboard.Name("MongrelPaste-\(UUID().uuidString)"))
+        defer { clipboard.releaseGlobally() }
+        clipboard.setString("MARY\nINT. FALSE SCENE - NIGHT\nOrdinary words.\n", forType: .string)
+        let undo = try XCTUnwrap(editor.undoManager)
+        undo.removeAllActions()
+        undo.groupsByEvent = false
+        undo.beginUndoGrouping()
+        XCTAssertTrue(editor.pasteScreenplay(from: clipboard))
+        undo.endUndoGrouping()
+        editor.textStorage?.enumerateAttribute(.screenplayElement, in: NSRange(location: 7, length: editor.string.utf16.count - original.length)) { value, _, _ in
+            XCTAssertEqual(value as? String, ScreenplayElement.dialogue.rawValue)
+        }
+        XCTAssertTrue(editor.string.contains("INT. FALSE SCENE - NIGHT"))
+        undo.undo()
+        XCTAssertTrue(editor.attributedString().isEqual(to: original))
+        undo.redo()
+        XCTAssertTrue(editor.string.contains("MARY\nINT."))
+    }
+
+    func testRichScreenplayPasteKeepsEmphasisButUsesDestinationGeometry() throws {
+        let harness = makeHarness(useTextKit2: true)
+        let editor = try XCTUnwrap(harness.textView as? ScreenplayTextView)
+        editor.string = "Existing dialogue."
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+        harness.bridge.applyScreenplayElement(.dialogue)
+        editor.setSelectedRange(NSRange(location: 4, length: 0))
+        let font = NSFontManager.shared.convert(NSFont.systemFont(ofSize: 36), toHaveTrait: [.boldFontMask, .italicFontMask])
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.headIndent = 200
+        paragraph.lineSpacing = 40
+        let source = NSAttributedString(string: "emphasis", attributes: [.font: font, .paragraphStyle: paragraph, .backgroundColor: NSColor.red, .underlineStyle: 1])
+        let clipboard = NSPasteboard(name: NSPasteboard.Name("MongrelRichPaste-\(UUID().uuidString)"))
+        defer { clipboard.releaseGlobally() }
+        clipboard.setData(try source.data(from: NSRange(location: 0, length: source.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]), forType: .rtf)
+        XCTAssertTrue(editor.pasteScreenplay(from: clipboard))
+        let attributes = try XCTUnwrap(editor.textStorage?.attributes(at: 4, effectiveRange: nil))
+        let pastedFont = try XCTUnwrap(attributes[.font] as? NSFont)
+        XCTAssertEqual(pastedFont.pointSize, 12, accuracy: 0.01)
+        XCTAssertTrue(NSFontManager.shared.traits(of: pastedFont).contains(.boldFontMask))
+        XCTAssertTrue(NSFontManager.shared.traits(of: pastedFont).contains(.italicFontMask))
+        XCTAssertEqual(attributes[.screenplayElement] as? String, ScreenplayElement.dialogue.rawValue)
+        XCTAssertEqual((attributes[.backgroundColor] as? NSColor)?.alphaComponent ?? 0, 0, accuracy: 0.001)
+        XCTAssertEqual(attributes[.underlineStyle] as? Int, 1)
+        XCTAssertNotEqual((attributes[.paragraphStyle] as? NSParagraphStyle)?.lineSpacing, 40)
+    }
+
+    func testExplicitParseCreatesScreenplayElementsAndNativePastePreservesThem() throws {
+        let harness = makeHarness(useTextKit2: true)
+        let editor = try XCTUnwrap(harness.textView as? ScreenplayTextView)
+        editor.string = "Replace this dialogue."
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+        harness.bridge.applyScreenplayElement(.dialogue)
+        let clipboard = NSPasteboard(name: NSPasteboard.Name("MongrelParse-\(UUID().uuidString)"))
+        defer { clipboard.releaseGlobally() }
+        let source = "INT. ROOM - DAY\nA door opens.\nMARY\nHello there.\n"
+        clipboard.setString(source, forType: .string)
+        harness.bridge.pasteAndParseScreenplay(from: clipboard)
+        XCTAssertEqual(editor.string, source)
+        XCTAssertEqual(ScreenplayCatalog.analyze(editor.attributedString()).headings, ["INT. ROOM - DAY"])
+        let expected: [(String, ScreenplayElement)] = [("INT.", .sceneHeading), ("A door", .action), ("MARY", .character), ("Hello", .dialogue)]
+        for (text, element) in expected {
+            let offset = (source as NSString).range(of: text).location
+            XCTAssertEqual(editor.textStorage?.attribute(.screenplayElement, at: offset, effectiveRange: nil) as? String, element.rawValue)
+            XCTAssertEqual(ScreenplayCatalog.elementTag(in: editor.attributedString(), at: offset), element)
+        }
+        editor.setSelectedRange(NSRange(location: 0, length: source.utf16.count))
+        clipboard.clearContents()
+        XCTAssertTrue(editor.writeSelection(to: clipboard, type: ScreenplayTextView.nativeSelectionType))
+        editor.setSelectedRange(NSRange(location: source.utf16.count, length: 0))
+        XCTAssertTrue(editor.readSelection(from: clipboard, type: ScreenplayTextView.nativeSelectionType))
+        XCTAssertEqual(editor.string, source + source)
+        for (text, element) in expected {
+            let offset = source.utf16.count + (source as NSString).range(of: text).location
+            XCTAssertEqual(editor.textStorage?.attribute(.screenplayElement, at: offset, effectiveRange: nil) as? String, element.rawValue)
+        }
+    }
+
+    func testParsingAndUndoReportTheRestoredElement() throws {
+        var reported = ScreenplayElement.action
+        let harness = makeHarness(useTextKit2: true, onElementChange: { reported = $0 })
+        let editor = harness.textView
+        editor.allowsUndo = true
+        editor.string = "Old dialogue."
+        editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+        harness.bridge.applyScreenplayElement(.dialogue)
+        let clipboard = NSPasteboard(name: NSPasteboard.Name("MongrelParseState-\(UUID().uuidString)"))
+        defer { clipboard.releaseGlobally() }
+        clipboard.setString("INT. ROOM - DAY\nA door opens.\nMARY", forType: .string)
+        let undo = try XCTUnwrap(editor.undoManager)
+        undo.removeAllActions()
+        undo.groupsByEvent = false
+        undo.beginUndoGrouping()
+        harness.bridge.pasteAndParseScreenplay(from: clipboard)
+        undo.endUndoGrouping()
+        XCTAssertEqual(reported, .character)
+        XCTAssertEqual(harness.bridge.activeScreenplayElement, .character)
+        undo.undo()
+        XCTAssertEqual(editor.string, "Old dialogue.")
+        XCTAssertEqual(reported, .dialogue)
+        undo.redo()
+        XCTAssertEqual(reported, .character)
+    }
+
+    private func makeViewport(for editor: NSTextView) -> (NSWindow, EditorScrollView) {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let viewport = EditorScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 420))
+        viewport.minMagnification = 0.6
+        viewport.maxMagnification = 2
+        viewport.documentView = editor
+        window.contentView = viewport
+        window.makeFirstResponder(editor)
+        return (window, viewport)
+    }
+
     private func makeHarness(
         authoringMode: AuthoringMode = .screenplay,
         pagePalette: DocumentPagePalette = .warmPaper,

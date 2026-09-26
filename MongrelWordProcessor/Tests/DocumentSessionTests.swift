@@ -1762,6 +1762,51 @@ final class DocumentSessionTests: XCTestCase {
         XCTAssertEqual(session.editorZoom, 1.1, accuracy: 0.001)
     }
 
+    @MainActor
+    func testZoomFromFitStartsAtVisibleScaleAndRejectsNonfiniteValues() {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        session.screenplayViewStyle = .fitWidth
+        let viewport = EditorScrollView(frame: NSRect(x: 0, y: 0, width: 700, height: 500))
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+        viewport.documentView = editor
+        viewport.magnification = 1.4
+        session.formattingBridge.textView = editor
+        session.adjustEditorZoom(by: 0.1)
+        XCTAssertEqual(session.editorZoom, 1.5, accuracy: 0.001)
+        XCTAssertEqual(session.screenplayViewStyle, .page)
+        session.setEditorZoom(.nan)
+        session.adjustEditorZoom(by: .infinity)
+        XCTAssertEqual(session.editorZoom, 1.5, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testSceneNavigationAndCatalogHonorDestinationElementsOverTextPatterns() {
+        let session = makeSession()
+        session.authoringMode = .screenplay
+        let pasted = session.formattingBridge.screenplayPaste(NSAttributedString(string: "MARY\nINT. SPOKEN WORDS - DAY\nMore dialogue.\n"), matching: .dialogue)
+        session.attributedText = pasted
+        session.markDirty()
+        XCTAssertEqual(session.screenplaySceneCount, 0)
+        XCTAssertTrue(session.screenplayCatalog.headings.isEmpty)
+        XCTAssertTrue(session.screenplayCatalog.characters.isEmpty)
+        let combined = NSMutableAttributedString(string: "INT. REAL ROOM - DAY\n")
+        combined.append(pasted)
+        session.attributedText = combined
+        session.markDirty()
+        XCTAssertEqual(session.screenplaySceneCount, 1)
+        XCTAssertEqual(session.screenplayCatalog.locations, ["REAL ROOM"])
+        XCTAssertEqual(session.screenplayScenes.first?.location, 0)
+        let explicitAction = NSMutableAttributedString(attributedString: combined)
+        let heading = (explicitAction.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+        explicitAction.addAttributes([.screenplayElement: ScreenplayElement.sceneHeading.rawValue,
+                                      .screenplayManualElement: ScreenplayElement.action.rawValue], range: heading)
+        session.attributedText = explicitAction
+        session.markDirty()
+        XCTAssertEqual(session.screenplaySceneCount, 0)
+        XCTAssertTrue(session.screenplayCatalog.locations.isEmpty)
+    }
+
     private func screenplayElement(in text: NSAttributedString, at location: Int) -> ScreenplayElement? {
         guard let raw = text.attribute(.screenplayElement, at: location, effectiveRange: nil) as? String else {
             return nil

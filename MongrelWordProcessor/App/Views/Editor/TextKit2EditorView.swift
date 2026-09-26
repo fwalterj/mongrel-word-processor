@@ -5,6 +5,7 @@ import SharedFoundation
 final class ScreenplayTextView: NSTextView {
     static let nativeSelectionType = NSPasteboard.PasteboardType("com.mongrel.screenplay-selection")
     private(set) var isPastingNativeContent = false
+    weak var screenplayBridge: FormattingBridge?
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
         isScreenplayPaginationActive ? [Self.nativeSelectionType] + super.writablePasteboardTypes : super.writablePasteboardTypes
@@ -12,6 +13,27 @@ final class ScreenplayTextView: NSTextView {
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         isScreenplayPaginationActive ? [Self.nativeSelectionType] + super.readablePasteboardTypes : super.readablePasteboardTypes
+    }
+
+    override func paste(_ sender: Any?) {
+        if !pasteScreenplay(from: .general) { super.paste(sender) }
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        if !pasteScreenplay(from: .general, plainTextOnly: true) { super.pasteAsPlainText(sender) }
+    }
+
+    override func pasteAsRichText(_ sender: Any?) {
+        if !pasteScreenplay(from: .general) { super.pasteAsRichText(sender) }
+    }
+
+    func pasteScreenplay(from pasteboard: NSPasteboard, plainTextOnly: Bool = false) -> Bool {
+        guard isScreenplayPaginationActive, screenplayBridge != nil else { return false }
+        let types: [NSPasteboard.PasteboardType] = plainTextOnly ? [.string] : [Self.nativeSelectionType, .rtfd, .rtf, .html, .string]
+        for type in types where pasteboard.availableType(from: [type]) != nil {
+            if readSelection(from: pasteboard, type: type) { return true }
+        }
+        return false
     }
 
     override func writeSelection(to pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
@@ -26,7 +48,20 @@ final class ScreenplayTextView: NSTextView {
     }
 
     override func readSelection(from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        guard type == Self.nativeSelectionType else { return super.readSelection(from: pasteboard, type: type) }
+        guard type == Self.nativeSelectionType else {
+            guard isScreenplayPaginationActive, let bridge = screenplayBridge else { return super.readSelection(from: pasteboard, type: type) }
+            let incoming: NSAttributedString?
+            if type == .string, let text = pasteboard.string(forType: .string) {
+                incoming = NSAttributedString(string: text)
+            } else if let data = pasteboard.data(forType: type), [.rtf, .rtfd, .html].contains(type) {
+                let documentType: NSAttributedString.DocumentType = type == .rtf ? .rtf : (type == .rtfd ? .rtfd : .html)
+                incoming = try? NSAttributedString(data: data, options: [.documentType: documentType], documentAttributes: nil)
+            } else { incoming = nil }
+            guard let incoming else { return super.readSelection(from: pasteboard, type: type) }
+            let element = bridge.detectedScreenplayElement(in: self)
+            insertScreenplayPaste(bridge.screenplayPaste(incoming, matching: element))
+            return true
+        }
         guard let data = pasteboard.data(forType: type), data.count <= 256 * 1_024 * 1_024,
               let archive = try? JSONDecoder().decode(MongrelDocumentArchive.self, from: data),
               let restored = try? archive.makeAttributedString() else { return false }
@@ -50,10 +85,27 @@ final class ScreenplayTextView: NSTextView {
         // Explicit fresh IDs also prevent AppKit from inheriting the adjacent
         // scene's identity when an untagged attributed string is inserted.
         for (range, replacement) in duplicateRanges { incoming.addAttribute(.screenplaySceneIdentity, value: replacement, range: range) }
+        insertScreenplayPaste(incoming)
+        return true
+    }
+
+    func insertScreenplayPaste(_ incoming: NSAttributedString) {
+        let prepared = NSMutableAttributedString(attributedString: incoming)
+        var elements: [(NSRange, String)] = []
+        prepared.enumerateAttributes(in: NSRange(location: 0, length: prepared.length)) { attributes, range, _ in
+            if attributes[.screenplayManualElement] == nil, let element = attributes[.screenplayElement] as? String {
+                elements.append((range, element))
+            }
+        }
+        // AppKit can inherit a destination paragraph's manual element when an
+        // inserted run lacks that key. Make the pasted semantics explicit before
+        // insertion so rendering, navigation, and later formatting agree.
+        for (range, element) in elements { prepared.addAttribute(.screenplayManualElement, value: element, range: range) }
+        breakUndoCoalescing()
         isPastingNativeContent = true
         defer { isPastingNativeContent = false }
-        insertText(incoming, replacementRange: selection)
-        return true
+        insertText(prepared, replacementRange: selectedRange())
+        breakUndoCoalescing()
     }
 
     var pageBackgroundColor = NSColor(red: 0.97, green: 0.95, blue: 0.89, alpha: 1) {
@@ -273,7 +325,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         contentStorage.textStorage?.setAttributedString(attributedText)
 
-        let scrollView = NSScrollView()
+        let scrollView = EditorScrollView()
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -379,7 +431,11 @@ struct TextKit2EditorView: NSViewRepresentable {
             context.coordinator.lastCodeFont = codeFont
             context.coordinator.lastCodeFontSize = codeFontSize
             if authoringMode == .code {
-                context.coordinator.applyCodeHighlighting(to: textView)
+                if let viewport = nsView as? EditorScrollView {
+                    viewport.preservingAnchor { context.coordinator.applyCodeHighlighting(to: textView) }
+                } else {
+                    context.coordinator.applyCodeHighlighting(to: textView)
+                }
             }
         }
 
@@ -428,6 +484,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         private var paginationWorkItem: DispatchWorkItem?
         private var pendingInsertedRange: NSRange?
         private var codeHighlightWorkItem: DispatchWorkItem?
+        private var pendingFormattingAnchor: EditorScrollView.Anchor?
         private var codeSyntaxExpressions: [CodeLanguage: NSRegularExpression] = [:]
         var lastLanguage: CodeLanguage = .swift
         var lastTheme: CodeTheme = .studio
@@ -460,6 +517,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             textView.breakUndoCoalescing()
             textView.undoManager?.removeAllActions()
             pendingInsertedRange = nil
+            pendingFormattingAnchor = nil
             ignoredCompanionWords.removeAll()
             lastMode = parent.authoringMode
             // NSTextView retains typing attributes when its storage becomes empty.
@@ -527,16 +585,14 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
 
             applyCompanionSpellings(to: textView)
-            let activeElement: ScreenplayElement
             if parent.authoringMode == .screenplay, !textView.hasMarkedText(),
                !parent.bridge.isApplyingExplicitFormatting,
+               (textView as? ScreenplayTextView)?.isPastingNativeContent != true,
                textView.undoManager?.isUndoing != true, textView.undoManager?.isRedoing != true {
-                if let range = pendingInsertedRange, (textView as? ScreenplayTextView)?.isPastingNativeContent != true {
+                if let range = pendingInsertedRange {
                     parent.bridge.formatInsertedScreenplay(in: textView, range: range)
                 }
-                activeElement = parent.bridge.autoFormatScreenplay(in: textView)
-            } else {
-                activeElement = parent.bridge.activeScreenplayElement
+                _ = parent.bridge.autoFormatScreenplay(in: textView)
             }
             let refreshEntirePresentation = pendingInsertedRange != nil || parent.bridge.isApplyingExplicitFormatting
                 || textView.undoManager?.isUndoing == true || textView.undoManager?.isRedoing == true
@@ -548,8 +604,14 @@ struct TextKit2EditorView: NSViewRepresentable {
             parent.onEdit()
             parent.bridge.updateFormattingState(from: textView)
             applyEditorPresentation(to: textView, refreshRendering: refreshEntirePresentation)
+            let formattingAnchor = pendingFormattingAnchor
+            pendingFormattingAnchor = nil
+            if let anchor = formattingAnchor, let viewport = textView.enclosingScrollView as? EditorScrollView {
+                viewport.synchronizeDocumentGeometry()
+                viewport.restoreAnchor(anchor)
+            }
             if parent.authoringMode == .screenplay {
-                reportScreenplayElement(activeElement)
+                reportScreenplayElement(parent.bridge.activeScreenplayElement)
                 parent.onScreenplayCursorChange(textView.selectedRange().location)
                 scheduleScreenplayPagination(for: textView)
             }
@@ -603,6 +665,9 @@ struct TextKit2EditorView: NSViewRepresentable {
             shouldChangeTextIn affectedCharRange: NSRange,
             replacementString: String?
         ) -> Bool {
+            if replacementString == nil {
+                pendingFormattingAnchor = (textView.enclosingScrollView as? EditorScrollView)?.captureAnchor()
+            }
             if let replacementString,
                replacementString.utf16.count > 1, replacementString.contains(where: \.isNewline) {
                 pendingInsertedRange = NSRange(location: affectedCharRange.location, length: replacementString.utf16.count)
@@ -702,6 +767,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             updatePublishedState: Bool = true
         ) {
             cancelPendingCodeHighlighting()
+            (textView as? ScreenplayTextView)?.screenplayBridge = parent.bridge
             switch mode {
             case .prose:
                 if let screenplayTextView = textView as? ScreenplayTextView {
@@ -917,6 +983,13 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         func applyLineWrap(_ wrap: Bool, to scrollView: NSScrollView) {
             guard let textView = scrollView.documentView as? NSTextView else { return }
+            if let editorScroll = scrollView as? EditorScrollView {
+                editorScroll.preservingAnchor {
+                    editorScroll.layoutMode = wrap ? .reflow : .unwrapped
+                    editorScroll.hasHorizontalScroller = !wrap
+                }
+                return
+            }
             scrollView.hasHorizontalScroller = !wrap
             if wrap {
                 textView.isHorizontallyResizable = false
@@ -936,6 +1009,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
 
         private func applyStandardDocumentMetrics(to textView: NSTextView) {
+            (textView.enclosingScrollView as? EditorScrollView)?.layoutMode = .reflow
             textView.enclosingScrollView?.hasHorizontalScroller = false
             textView.minSize = .zero
             textView.maxSize = NSSize(
@@ -952,6 +1026,7 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
 
         private func applyScreenplayPageMetrics(to textView: NSTextView) {
+            (textView.enclosingScrollView as? EditorScrollView)?.layoutMode = .screenplay
             textView.enclosingScrollView?.hasHorizontalScroller = false
             textView.minSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: 0)
             textView.maxSize = NSSize(width: ScreenplayPageLayout.pageSize.width, height: .greatestFiniteMagnitude)
@@ -1020,6 +1095,10 @@ struct TextKit2EditorView: NSViewRepresentable {
         }
 
         func updateMagnification(_ magnification: CGFloat, in scrollView: NSScrollView) {
+            if let editorScroll = scrollView as? EditorScrollView {
+                editorScroll.setEditorMagnification(magnification)
+                return
+            }
             let previousOrigin = scrollView.documentVisibleRect.origin
             scrollView.magnification = magnification
 

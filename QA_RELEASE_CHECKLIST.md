@@ -165,3 +165,21 @@ The deliverable and detailed evidence are under `build/Confident-1.0.0-2/`. Earl
 **176 repository test methods passed with zero assertion failures**, including the existing heavy-use workloads and all 14 local screenplay samples. `Scripts/run-native-checks.sh` now makes the standalone fallback validation repeatable from a checkout. The test corpus remains local and ignored by Git. No new matching crash report appeared during this pass.
 
 The shareable assets are in `build/Confident-1.0.0-3/`; build 2 and the older QA candidates were moved to Trash. Intel was cross-compiled, not executed: this Mac does not have Rosetta installed. Runtime testing was on Apple Silicon; older supported macOS releases and a second physical Mac remain untested. Xcode/XCTest still requires the user to accept the installed Xcode SDK license. These limits do not affect the notarization and Gatekeeper checks that passed for this package.
+
+
+## September 25 interaction pass — confident build 1.0.0 (4)
+
+- [x] Reproduced and fixed zoom clipping in prose and wrapped code. Character-based viewport anchors preserve selection and reading position through zoom, resize, and wrapping changes.
+- [x] Verified fixed screenplay page width and page counts across 60–200% display zoom; manual zoom from Fit Width starts at the displayed scale.
+- [x] Corrected font-size actions, focus restoration, and undo/redo. Confirmed selected text survives native fullscreen entry/exit.
+- [x] Routed actual native Paste commands through destination-aware screenplay semantics. External paragraph/font geometry is removed while supported inline emphasis remains.
+- [x] Added explicit Paste and Parse Screenplay. Parsed/native content cannot inherit a conflicting destination element; toolbar state is reported after the edit and after undo/redo.
+- [x] Scene counts, navigation, and catalogs respect assigned elements instead of reinterpreting Dialogue as a scene from its text.
+- [x] Corrected security-scoped recovery: activate access before checking file existence/identity and while capturing bookmarks. Verified clean and dirty named documents across repeated sandboxed quit/relaunch cycles.
+- [x] All 188 repository test methods passed through the native fallback harness, including existing heavy-use workloads and all 14 local PDF samples. A separate 411,693-unit viewport probe retained a caret near the end through four reflows in 0.24–0.27 seconds each on the validation Mac.
+- [x] Optimized universal build, strict concurrency, warnings-as-errors, regenerated project, source hash verification, and git diff --check passed.
+- [x] Developer ID signing, Apple notarization, stapled app/DMG tickets, and Gatekeeper acceptance passed. Installed from the DMG and verified the installed executable matches the package.
+- [x] Existing workspace was backed up and its original three-tab state preserved. Two missing access bookmarks were refreshed; exact text equality was verified before removing duplicate recovery entries. Saved connections persisted through another relaunch.
+- [x] Older local builds and temporary fixtures moved to recoverable Trash. No new matching crash reports found.
+
+Detailed evidence is packaged in `build/Confident-1.0.0-4/VALIDATION.md`. Intel remains cross-compiled only; second-Mac and older-macOS runtime checks remain open. Xcode/XCTest still requires acceptance of the installed SDK license; the successful results above came from the native fallback harness.

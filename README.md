@@ -120,7 +120,15 @@ The presentation uses crisp type, fine rules, restrained page edges, and inverte
 
 Contrast is a display preference. It does not rewrite document colors, formatting, clipboard contents, or undo history. Colored highlights remain visible in neutral tones while their original colors remain in the file. **Page Layout** controls saved page colors and the colors used for PDF and printing. Choosing another appearance palette restores the document's working colors and the selected coding theme.
 
-## Confident build — 1.0.0 (3)
+## Confident build — 1.0.0 (4)
+
+The September 25 interaction pass fixes magnifier clipping in prose and wrapped code. Zoom, resizing, wrapping, and font changes preserve the selection and reading position; screenplay view zoom leaves print geometry and page counts alone. Font-size controls return focus to the editor and retain undo/redo.
+
+Screenplay Paste now follows the element at the insertion point. External fonts and paragraph geometry are removed while inline emphasis remains. Native screenplay copies retain their element metadata. Use **Screenplay → Paste and Parse Screenplay** when you want a plain-text script interpreted as scenes, action, cues, and dialogue. The scene navigator and catalog respect assigned elements, so an `INT.` line inside Dialogue is not silently counted as a scene.
+
+188 repository test methods passed through the native fallback harness. A separate 411,693-character viewport probe preserved a caret near the end through 60–200% zoom, taking 0.24–0.27 seconds per reflow on the validation Mac. These are native operation timings, not end-to-end UI latency guarantees. See [editor behavior](EDITOR_BEHAVIOR.md) and [release notes](RELEASE_NOTES.md).
+
+### Earlier hardening retained
 
 The September 24 pass keeps recent documents in a bounded sidebar list, shows their parent folders, and marks the current screenplay scene with the same inverted selection used by the tabs. Bulk paste, formatting, undo, and redo refresh the whole affected presentation so long screenplays remain readable in both Contrast surfaces. Ordinary typing still refreshes only its active paragraph.
 

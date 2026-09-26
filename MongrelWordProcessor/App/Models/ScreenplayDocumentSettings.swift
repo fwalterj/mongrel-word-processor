@@ -126,16 +126,16 @@ struct ScreenplayCatalog: Equatable {
         while location < source.length {
             let range = source.paragraphRange(for: NSRange(location: location, length: 0))
             let value = source.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-            let tag = text.attribute(.screenplayElement, at: location, effectiveRange: nil) as? String
-            if tag == ScreenplayElement.character.rawValue, !value.isEmpty {
+            let tag = elementTag(in: text, at: location)
+            if tag == .character, !value.isEmpty {
                 let name = canonicalCharacterName(value)
                 if !name.isEmpty { names.insert(name) }
-            } else if tag == ScreenplayElement.sceneHeading.rawValue || isSceneHeading(value) {
+            } else if tag == .sceneHeading || (tag == nil && isSceneHeading(value)) {
                 let heading = value.uppercased()
                 if !heading.isEmpty { headings.insert(heading) }
                 let place = locationName(heading)
                 if !place.isEmpty { places.insert(place) }
-            } else if (tag == nil || tag == ScreenplayElement.action.rawValue), !value.isEmpty {
+            } else if (tag == nil || tag == .action), !value.isEmpty {
                 result.actionBlocks.append(ScreenplayActionBlock(location: location, text: value,
                     estimatedLines: max(1, Int(ceil(Double(value.count) / 60)))))
             }
@@ -148,6 +148,15 @@ struct ScreenplayCatalog: Equatable {
     }
 
     static let scenePrefixes = ["INT./EXT.", "EXT./INT.", "INT/EXT.", "EXT/INT.", "INT.", "EXT.", "I/E.", "EST."]
+
+    static func elementTag(in text: NSAttributedString, at location: Int) -> ScreenplayElement? {
+        guard location >= 0, location < text.length else { return nil }
+        for key in [NSAttributedString.Key.screenplayManualElement, .screenplayElement] {
+            if let raw = text.attribute(key, at: location, effectiveRange: nil) as? String,
+               let element = ScreenplayElement(rawValue: raw) { return element }
+        }
+        return nil
+    }
 
     static func isSceneHeading(_ text: String) -> Bool {
         let upper = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()

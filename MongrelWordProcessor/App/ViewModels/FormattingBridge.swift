@@ -228,43 +228,106 @@ final class FormattingBridge: ObservableObject {
 
     // MARK: – Responder-chain actions (NSTextView handles these when first responder)
 
+    private func performEditorAction(_ selector: Selector) {
+        guard let textView else { return }
+        focusEditor()
+        NSApp.sendAction(selector, to: textView, from: nil)
+    }
+
     func bold() {
-        NSApp.sendAction(NSSelectorFromString("toggleBoldface:"), to: nil, from: nil)
+        performEditorAction(NSSelectorFromString("toggleBoldface:"))
     }
 
     func italic() {
-        NSApp.sendAction(NSSelectorFromString("toggleItalics:"), to: nil, from: nil)
+        performEditorAction(NSSelectorFromString("toggleItalics:"))
     }
 
     func underline() {
-        NSApp.sendAction(NSSelectorFromString("toggleUnderline:"), to: nil, from: nil)
+        performEditorAction(NSSelectorFromString("toggleUnderline:"))
     }
 
     func alignLeft() {
-        NSApp.sendAction(#selector(NSText.alignLeft(_:)), to: nil, from: nil)
+        performEditorAction(#selector(NSText.alignLeft(_:)))
     }
 
     func alignCenter() {
-        NSApp.sendAction(#selector(NSText.alignCenter(_:)), to: nil, from: nil)
+        performEditorAction(#selector(NSText.alignCenter(_:)))
     }
 
     func alignRight() {
-        NSApp.sendAction(#selector(NSText.alignRight(_:)), to: nil, from: nil)
+        performEditorAction(#selector(NSText.alignRight(_:)))
     }
 
     func increaseFontSize() {
-        NSApp.sendAction(NSSelectorFromString("increaseFontSize:"), to: nil, from: nil)
+        adjustFontSize(by: 1)
     }
 
     func decreaseFontSize() {
-        NSApp.sendAction(NSSelectorFromString("decreaseFontSize:"), to: nil, from: nil)
+        adjustFontSize(by: -1)
+    }
+
+    private func adjustFontSize(by delta: CGFloat) {
+        guard let editor = textView, let storage = editor.textStorage else { return }
+        focusEditor()
+        let selection = editor.selectedRange()
+        let resized: (NSFont) -> NSFont = { font in
+            NSFontManager.shared.convert(font, toSize: min(144, max(6, font.pointSize + delta)))
+        }
+        if selection.length == 0 {
+            let font = editor.typingAttributes[.font] as? NSFont ?? NSFont.systemFont(ofSize: 14)
+            editor.typingAttributes[.font] = resized(font)
+            updateFormattingState(from: editor)
+            return
+        }
+        guard selection.location <= storage.length, selection.length <= storage.length - selection.location else { return }
+        editor.breakUndoCoalescing()
+        let change = {
+            guard editor.shouldChangeText(in: selection, replacementString: nil) else { return }
+            var fonts: [(NSRange, NSFont)] = []
+            storage.enumerateAttribute(.font, in: selection) { value, range, _ in
+                fonts.append((range, resized(value as? NSFont ?? NSFont.systemFont(ofSize: 14))))
+            }
+            storage.beginEditing()
+            for (range, font) in fonts { storage.addAttribute(.font, value: font, range: range) }
+            storage.endEditing()
+            editor.didChangeText()
+        }
+        if let viewport = editor.enclosingScrollView as? EditorScrollView { viewport.preservingAnchor(change) }
+        else { change() }
+        editor.undoManager?.setActionName(delta > 0 ? "Increase Text Size" : "Decrease Text Size")
+        editor.breakUndoCoalescing()
+    }
+
+    func screenplayPaste(_ source: NSAttributedString, matching element: ScreenplayElement) -> NSAttributedString {
+        let result = NSMutableAttributedString(attributedString: source)
+        let range = NSRange(location: 0, length: result.length)
+        for key in [NSAttributedString.Key.screenplayElement, .screenplayManualElement, .screenplaySceneIdentity, .backgroundColor] {
+            result.removeAttribute(key, range: range)
+        }
+        applyScreenplayAttributes(for: element, to: result, range: range)
+        result.addAttribute(.screenplayManualElement, value: element.rawValue, range: range)
+        return result
+    }
+
+    func pasteAndParseScreenplay(from pasteboard: NSPasteboard = .general) {
+        guard let editor = textView as? ScreenplayTextView, editor.isScreenplayPaginationActive,
+              let text = pasteboard.string(forType: .string) else { return }
+        focusEditor()
+        editor.insertScreenplayPaste(formattedScreenplay(NSAttributedString(string: text), normalize: false))
     }
 
     // MARK: – Direct text-storage actions
 
     func applyScreenplayElement(_ element: ScreenplayElement) {
         guard let tv = textView else { return }
-        applyScreenplayElement(element, to: tv)
+        focusEditor()
+        tv.breakUndoCoalescing()
+        if let viewport = tv.enclosingScrollView as? EditorScrollView {
+            viewport.preservingAnchor { applyScreenplayElement(element, to: tv) }
+        } else {
+            applyScreenplayElement(element, to: tv)
+        }
+        tv.breakUndoCoalescing()
     }
 
     func applyScreenplayElement(
@@ -386,10 +449,18 @@ final class FormattingBridge: ObservableObject {
         updateFormattingState(from: textView)
     }
 
-    func focusEditor() {
+    func focusEditor(revealSelection: Bool = true) {
         guard let textView else { return }
-        textView.window?.makeFirstResponder(textView)
-        textView.scrollRangeToVisible(textView.selectedRange())
+        if textView.window?.firstResponder === textView {
+            if revealSelection { textView.scrollRangeToVisible(textView.selectedRange()) }
+            return
+        }
+        if !revealSelection, let viewport = textView.enclosingScrollView as? EditorScrollView {
+            viewport.preservingAnchor { textView.window?.makeFirstResponder(textView) }
+        } else {
+            textView.window?.makeFirstResponder(textView)
+            if revealSelection { textView.scrollRangeToVisible(textView.selectedRange()) }
+        }
     }
 
     func autoFormatScreenplay(in tv: NSTextView) -> ScreenplayElement {
@@ -557,6 +628,7 @@ final class FormattingBridge: ObservableObject {
     /// Toggles strikethrough on the current selection.
     func strikethrough() {
         guard let tv = textView else { return }
+        focusEditor()
         let range = tv.selectedRange()
         guard range.length > 0, let ts = tv.textStorage else { return }
         let existing = ts.attribute(.strikethroughStyle, at: range.location, effectiveRange: nil) as? Int ?? 0
@@ -570,6 +642,7 @@ final class FormattingBridge: ObservableObject {
     /// - Parameter level: 1 = H1 (26pt), 2 = H2 (22pt), 3 = H3 (18pt)
     func applyHeading(_ level: Int) {
         guard let tv = textView else { return }
+        focusEditor()
         let selectedRange = tv.selectedRange()
         guard let ts = tv.textStorage else { return }
         let paragraphRange = (tv.string as NSString).paragraphRange(for: selectedRange)

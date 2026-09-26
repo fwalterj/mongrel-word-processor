@@ -67,11 +67,13 @@ struct WorkspaceRecoveryTab: Codable {
         id = tab.id
         title = state.title
         filePath = state.currentURL?.path
-        bookmarkData = try? state.currentURL?.bookmarkData(
-            options: [.withSecurityScope],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )
+        if let url = state.currentURL {
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+            bookmarkData = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        } else {
+            bookmarkData = nil
+        }
         fileModificationDate = state.diskVersion?.modificationDate
         fileSize = state.diskVersion?.fileSize
         fileNumber = state.diskVersion?.fileNumber

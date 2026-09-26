@@ -27,6 +27,7 @@
 		BD7B0D8773023F259981058C /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = DA3358EC92F3559BE6627E9C /* manifest.json */; };
 		C4A539EBDC90AB9F26144E34 /* PDFKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C7093040F437F963784527C3 /* PDFKit.framework */; };
 		D5697C50F9C6ABD7570650E3 /* SharedFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = B2D62DE8E2BC72FF84BA1FEB /* SharedFoundation */; };
+		DB71453FB9C532269C16231D /* EditorScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44293302C7B4794F38038FFC /* EditorScrollView.swift */; };
 		E5AA739B25FCBD1741C0A4A9 /* DocumentPageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 680F8C98B5D7E097E022414A /* DocumentPageLayout.swift */; };
 		E858139410B8F8FE683FD783 /* CodeTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B279481BD525EE1D69AEF9 /* CodeTextEditing.swift */; };
 		F41B7DA167516ECFD0F92E1F /* spellcheck_dictionary.txt in Resources */ = {isa = PBXBuildFile; fileRef = DCAB1A511A844BF112352251 /* spellcheck_dictionary.txt */; };
@@ -49,6 +50,7 @@
 		3228FB88B36A352605F4B9FF /* LocalLanguageToolClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLanguageToolClient.swift; sourceTree = "<group>"; };
 		32C4B5AF281332A0760AA0F0 /* WorkspaceRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRecoveryStore.swift; sourceTree = "<group>"; };
 		3B586887675402518D3AA9CC /* MongrelWordProcessor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MongrelWordProcessor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		44293302C7B4794F38038FFC /* EditorScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorScrollView.swift; sourceTree = "<group>"; };
 		48C1ABAEF2F2E9CFB5E505B3 /* MongrelWordProcessorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelWordProcessorApp.swift; sourceTree = "<group>"; };
 		562CED398C2ACCE4999CAE0A /* MongrelWordProcessorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MongrelWordProcessorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		651AB30B5228FD32096E0FF3 /* CodeTextEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextEditingTests.swift; sourceTree = "<group>"; };
@@ -207,6 +209,7 @@
 		E0CC215102CEB372E81AD945 /* Editor */ = {
 			isa = PBXGroup;
 			children = (
+				44293302C7B4794F38038FFC /* EditorScrollView.swift */,
 				DEDE05BC19CB789A9B2A75DF /* TextKit2EditorView.swift */,
 			);
 			path = Editor;
@@ -331,6 +334,7 @@
 				7D1E5DB7AD0818FC8E44C7BF /* DocumentInsightsAnalyzer.swift in Sources */,
 				E5AA739B25FCBD1741C0A4A9 /* DocumentPageLayout.swift in Sources */,
 				0D7BF7893436D9F227282165 /* DocumentSession.swift in Sources */,
+				DB71453FB9C532269C16231D /* EditorScrollView.swift in Sources */,
 				854040129A4D155F581A1566 /* FormattingBridge.swift in Sources */,
 				981AA17B63081E4BB0C0695D /* LocalLanguageToolClient.swift in Sources */,
 				17EFC87D9C2D6B85B5CF28A3 /* ManagedFontLibrary.swift in Sources */,
@@ -361,7 +365,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/MongrelWordProcessor.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = "";
@@ -493,7 +497,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/MongrelWordProcessor.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;

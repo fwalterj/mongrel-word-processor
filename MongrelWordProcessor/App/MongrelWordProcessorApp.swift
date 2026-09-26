@@ -226,6 +226,13 @@ private struct WordProcessorCommands: Commands {
         }
 
         CommandMenu("Screenplay") {
+            Button("Paste and Parse Screenplay") {
+                session.formattingBridge.pasteAndParseScreenplay()
+            }
+            .disabled(session.authoringMode != .screenplay)
+
+            Divider()
+
             Button("Previous Scene") {
                 session.selectAdjacentScene(offset: -1)
             }
