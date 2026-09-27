@@ -120,13 +120,13 @@ The presentation uses crisp type, fine rules, restrained page edges, and inverte
 
 Contrast is a display preference. It does not rewrite document colors, formatting, clipboard contents, or undo history. Colored highlights remain visible in neutral tones while their original colors remain in the file. **Page Layout** controls saved page colors and the colors used for PDF and printing. Choosing another appearance palette restores the document's working colors and the selected coding theme.
 
-## Confident build — 1.0.0 (4)
+## Confident build — 1.0.0 (5)
 
 The September 25 interaction pass fixes magnifier clipping in prose and wrapped code. Zoom, resizing, wrapping, and font changes preserve the selection and reading position; screenplay view zoom leaves print geometry and page counts alone. Font-size controls return focus to the editor and retain undo/redo.
 
 Screenplay Paste now follows the element at the insertion point. External fonts and paragraph geometry are removed while inline emphasis remains. Native screenplay copies retain their element metadata. Use **Screenplay → Paste and Parse Screenplay** when you want a plain-text script interpreted as scenes, action, cues, and dialogue. The scene navigator and catalog respect assigned elements, so an `INT.` line inside Dialogue is not silently counted as a scene.
 
-188 repository test methods passed through the native fallback harness. A separate 411,693-character viewport probe preserved a caret near the end through 60–200% zoom, taking 0.24–0.27 seconds per reflow on the validation Mac. These are native operation timings, not end-to-end UI latency guarantees. See [editor behavior](EDITOR_BEHAVIOR.md) and [release notes](RELEASE_NOTES.md).
+198 repository test methods passed through the native fallback harness. The September 27 pass adds Word formatting round trips, sparse syntax updates, cached line positions, and viewport materialization after reflow. Live checks include a 2,000-paragraph Word document and a 533,890-character source file, including zoom at the file end. See [editor behavior](EDITOR_BEHAVIOR.md) and [release notes](RELEASE_NOTES.md).
 
 ### Earlier hardening retained
 
@@ -155,3 +155,9 @@ NOTARY_PROFILE='YOUR KEYCHAIN PROFILE' \
 ```
 
 The packaging script notarizes and staples both the app and installer, checks Gatekeeper acceptance, and creates the universal DMG, ZIP, and checksums. No signing credentials are stored in the repository. Intel code is cross-compiled; runtime validation so far has been on Apple Silicon.
+
+## Word formatting and large documents — 1.0.0 (5)
+
+The September 27 build restores Word paragraph style inheritance, first-line and hanging indents, fonts, spacing, alignment, tab stops, and web links. Word save/reopen retains corrected indentation and line height. Complex Word layout features remain subject to the native converter's limits; see [release notes](RELEASE_NOTES.md).
+
+Large source files retain syntax colouring without rewriting every unchanged formatting run. Line positions are cached, and ordinary scrolling skips redundant viewport geometry work. The new supplied typewriter icon is generated from `Branding/wordproc.png` using `Scripts/render-app-icon.swift` and `iconutil`.

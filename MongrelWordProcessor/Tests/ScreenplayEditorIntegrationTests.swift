@@ -1065,6 +1065,76 @@ final class ScreenplayEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(reported, .character)
     }
 
+    func testLargeCodeEditDoesNotRewriteFormattingOfUnchangedParagraphs() throws {
+        let harness = makeHarness(authoringMode: .code, contrastPolarity: .black, useTextKit2: true)
+        let source = String(repeating: "let answer = 42 // a quiet comment\n", count: 12_000)
+        harness.textView.string = source
+        harness.coordinator.applyEditorMode(.code, to: harness.textView)
+        let recorder = EditorAttributeEditRecorder()
+        let storage = try XCTUnwrap(harness.textView.textStorage)
+        storage.delegate = recorder
+        let offset = storage.length - 34 + 1
+        harness.textView.setSelectedRange(NSRange(location: offset, length: 0))
+        harness.textView.insertText("x", replacementRange: harness.textView.selectedRange())
+        harness.coordinator.flushPendingCodeHighlighting()
+        XCTAssertTrue(recorder.ranges.allSatisfy { $0.location >= offset - 2 && $0.length < 40 })
+        XCTAssertEqual(harness.textView.string.utf16.count, source.utf16.count + 1)
+        XCTAssertEqual(harness.coordinator.parent.attributedText.string, harness.textView.string)
+    }
+
+    func testSyntaxChangeStillPropagatesAcrossMultilineCommentBoundary() throws {
+        let harness = makeHarness(authoringMode: .code, contrastPolarity: .black, useTextKit2: true)
+        harness.textView.allowsUndo = true
+        harness.textView.string = "/* comment */\nlet answer = 42\n" + String(repeating: "let other = 10\n", count: 2_000)
+        harness.coordinator.applyEditorMode(.code, to: harness.textView)
+        let storage = try XCTUnwrap(harness.textView.textStorage)
+        let original = try XCTUnwrap(storage.attribute(.foregroundColor, at: 15, effectiveRange: nil) as? NSColor)
+        harness.textView.insertText("", replacementRange: NSRange(location: 11, length: 2))
+        harness.coordinator.flushPendingCodeHighlighting()
+        // Close the comment later: the following lines must then become comments.
+        harness.textView.insertText("*/", replacementRange: NSRange(location: 200, length: 0))
+        harness.coordinator.flushPendingCodeHighlighting()
+        XCTAssertNotEqual(storage.attribute(.foregroundColor, at: 15, effectiveRange: nil) as? NSColor, original)
+        let undo = try XCTUnwrap(harness.textView.undoManager)
+        XCTAssertTrue(undo.canUndo)
+    }
+
+    func testRepeatedUnchangedViewportTilingDoesNotRevisitDocumentLayout() throws {
+        let harness = makeHarness(authoringMode: .prose, useTextKit2: true)
+        let (window, viewport) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        harness.textView.string = String(repeating: "A long paragraph with enough words to wrap across the canvas.\n\n", count: 7_000)
+        viewport.synchronizeDocumentGeometry()
+        let end = harness.textView.string.utf16.count - 20
+        harness.textView.setSelectedRange(NSRange(location: end, length: 0))
+        harness.textView.scrollRangeToVisible(harness.textView.selectedRange())
+        let anchor = try XCTUnwrap(viewport.captureAnchor())
+        let started = Date()
+        for _ in 0..<1_000 { viewport.tile() }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        XCTAssertEqual(try XCTUnwrap(viewport.captureAnchor()).location, anchor.location)
+    }
+
+    func testLargeDocumentZoomMaterializesTheRestoredViewportAtDocumentEnd() throws {
+        let harness = makeHarness(authoringMode: .prose, useTextKit2: true)
+        let (window, viewport) = makeViewport(for: harness.textView)
+        defer { window.close() }
+        harness.textView.string = String(repeating: "A paragraph for the long document zoom regression.\n", count: 8_000)
+        viewport.synchronizeDocumentGeometry()
+        let end = harness.textView.string.utf16.count
+        harness.textView.setSelectedRange(NSRange(location: end, length: 0))
+        harness.textView.scrollRangeToVisible(harness.textView.selectedRange())
+        for scale: CGFloat in [1.2, 1.6, 0.8] {
+            viewport.setEditorMagnification(scale)
+            let manager = try XCTUnwrap(harness.textView.textLayoutManager)
+            let content = try XCTUnwrap(manager.textContentManager)
+            let visible = try XCTUnwrap(manager.textViewportLayoutController.viewportRange)
+            let last = content.offset(from: content.documentRange.location, to: visible.endLocation)
+            XCTAssertEqual(last, end)
+            XCTAssertEqual(harness.textView.selectedRange().location, end)
+        }
+    }
+
     private func makeViewport(for editor: NSTextView) -> (NSWindow, EditorScrollView) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1183,5 +1253,12 @@ private final class ReentrantCompletionTextView: NSTextView {
         if completionCalls < 4 {
             insertText("t", replacementRange: selectedRange())
         }
+    }
+}
+
+private final class EditorAttributeEditRecorder: NSObject, NSTextStorageDelegate {
+    var ranges: [NSRange] = []
+    func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
+        ranges.append(editedRange)
     }
 }

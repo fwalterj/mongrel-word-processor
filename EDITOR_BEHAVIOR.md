@@ -32,3 +32,13 @@ Named files retain a saved access bookmark. Recovery activates that grant before
 `Scripts/run-native-checks.sh` exercises the repository's native test bodies when the Xcode test runner is unavailable. Interaction coverage uses real TextKit 2 editors and native windows, including selection anchors, mixed-mode recovery, clipboard data, undo/redo, and screenplay pagination. Live app testing is also necessary: a direct clipboard-reader check did not reveal that native Paste could take another AppKit path.
 
 Release evidence and outstanding platform limits are recorded in `QA_RELEASE_CHECKLIST.md` and the packaged `VALIDATION.md`. Intel is cross-compiled; a physical Intel Mac and older supported macOS versions still need runtime testing.
+
+## Word interchange
+
+Word imports use native rich-text conversion, then resolve DOCX paragraph defaults, `basedOn` style chains, numbering indentation, and direct paragraph properties. First-line offsets are relative to the left indent; hanging offsets subtract from it. Explicit zero properties override inheritance. Run styles preserve fonts, emphasis, size and colors, with direct overrides. Web links come from the package relationships. The implementation follows Microsoft's [indentation property semantics](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.indentation).
+
+Properties are applied only after matching the source paragraph's visible text. Native attachments and table blocks remain intact. Export patches indentation and line-height XML omitted by AppKit so saving does not immediately lose the imported layout. Complex numbering and other advanced Word layout remain native-converter limitations.
+
+## Large-file work
+
+Unchanged scroll tiling does no text-anchor or whole-document geometry work. Explicit reflow still resolves layout to preserve absolute reading positions. Code cursor positions use a per-revision line index, while syntax refresh compares existing attributes and mutates only changed runs. Lexical analysis still spans the file to handle multiline comments correctly. Contrast refreshes imported text once after native installation settles.

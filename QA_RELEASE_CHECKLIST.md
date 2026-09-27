@@ -183,3 +183,12 @@ The shareable assets are in `build/Confident-1.0.0-3/`; build 2 and the older QA
 - [x] Older local builds and temporary fixtures moved to recoverable Trash. No new matching crash reports found.
 
 Detailed evidence is packaged in `build/Confident-1.0.0-4/VALIDATION.md`. Intel remains cross-compiled only; second-Mac and older-macOS runtime checks remain open. Xcode/XCTest still requires acceptance of the installed SDK license; the successful results above came from the native fallback harness.
+
+## Word and large-file regression pass
+
+- [x] Open the generated WordFormatting.docx fixture directly into Black Contrast; verify first paint, then White Contrast.
+- [x] Verify first-line, hanging, inherited, and zero-reset indents; spacing, tabs, font overrides, links, and table cells.
+- [x] Save as DOCX and native Mongrel format, reopen, and compare paragraph geometry.
+- [x] Exercise a 2,000-paragraph Word file and a 500,000+ character source: end navigation, typing, undo, scroll, zoom, wrap, tab switching, and relaunch.
+- [x] Confirm syntax changes affect adjacent/multiline context without rewriting unrelated paragraph formatting.
+- [x] Check the supplied typewriter icon in the bundle and installer.

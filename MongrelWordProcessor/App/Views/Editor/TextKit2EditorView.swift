@@ -155,6 +155,10 @@ final class ScreenplayTextView: NSTextView {
     @objc private func viewportDidScroll() { refreshScreenplayOverlay() }
 
     func refreshScreenplayOverlay() {
+        guard isScreenplayPaginationActive else {
+            screenplayOverlay.isHidden = true
+            return
+        }
         if screenplayOverlay.superview == nil {
             screenplayOverlay.textView = self
             screenplayOverlay.wantsLayer = true
@@ -377,6 +381,8 @@ struct TextKit2EditorView: NSViewRepresentable {
         context.coordinator.lastDocumentSnapshot = attributedText
         if needsDocumentSync {
             context.coordinator.isApplyingEdit = true
+            context.coordinator.presentationNeedsRefresh = true
+            context.coordinator.invalidateCodeLineIndex()
             let selection = textView.selectedRange()
             textView.textStorage?.setAttributedString(attributedText)
             if changedDocument {
@@ -481,10 +487,12 @@ struct TextKit2EditorView: NSViewRepresentable {
         var lastDocumentID: UUID?
         var lastDocumentSnapshot: NSAttributedString?
         var paginationNeedsUpdate = true
+        var presentationNeedsRefresh = true
         private var paginationWorkItem: DispatchWorkItem?
         private var pendingInsertedRange: NSRange?
         private var codeHighlightWorkItem: DispatchWorkItem?
         private var pendingFormattingAnchor: EditorScrollView.Anchor?
+        private var codeLineIndex: TextLineIndex?
         private var codeSyntaxExpressions: [CodeLanguage: NSRegularExpression] = [:]
         var lastLanguage: CodeLanguage = .swift
         var lastTheme: CodeTheme = .studio
@@ -514,6 +522,7 @@ struct TextKit2EditorView: NSViewRepresentable {
 
         func resetDocumentEditingState(in textView: NSTextView) {
             cancelPendingCodeHighlighting()
+            codeLineIndex = nil
             textView.breakUndoCoalescing()
             textView.undoManager?.removeAllActions()
             pendingInsertedRange = nil
@@ -552,6 +561,12 @@ struct TextKit2EditorView: NSViewRepresentable {
                       let textView,
                       self.textView === textView,
                       self.stateReportGeneration == generation else { return }
+                if self.presentationNeedsRefresh {
+                    // AppKit can finish installing imported rich text after the
+                    // SwiftUI update. Reapply display-only ink once that settles.
+                    self.presentationNeedsRefresh = false
+                    self.applyEditorPresentation(to: textView)
+                }
                 self.parent.bridge.updateFormattingState(from: textView)
                 if self.parent.authoringMode == .screenplay {
                     self.reportScreenplayElement(self.parent.bridge.activeScreenplayElement)
@@ -573,6 +588,7 @@ struct TextKit2EditorView: NSViewRepresentable {
             // Native completion can synchronously insert its preview and send a
             // second didChangeText. Guard before calling AppKit, not afterwards.
             isApplyingEdit = true
+            codeLineIndex = nil
             defer { isApplyingEdit = false }
 
             if parent.authoringMode == .code {
@@ -741,9 +757,12 @@ struct TextKit2EditorView: NSViewRepresentable {
             }
         }
 
+        func invalidateCodeLineIndex() { codeLineIndex = nil }
+
         func reportCodePosition(in textView: NSTextView) {
             guard parent.authoringMode == .code else { return }
-            let position = CodeTextEditing.cursorPosition(in: textView.string, selection: textView.selectedRange())
+            if codeLineIndex == nil { codeLineIndex = TextLineIndex(textView.string) }
+            guard let position = codeLineIndex?.position(at: textView.selectedRange()) else { return }
             parent.onCodePositionChange(position.line, position.column, position.selectionLength)
         }
 
@@ -878,9 +897,11 @@ struct TextKit2EditorView: NSViewRepresentable {
                 manager.renderingAttributesValidator = polarity == nil ? nil : { [weak self] manager, fragment in
                     self?.applyContrastRendering(to: manager, range: fragment.rangeInElement)
                 }
-                if refreshRendering {
+                if refreshRendering || linkRenderingDelegate == nil {
                     linkRenderingDelegate = polarity.map { ContrastLinkRenderingDelegate(foreground: $0.foreground) }
                     manager.delegate = linkRenderingDelegate
+                }
+                if refreshRendering {
                     manager.invalidateRenderingAttributes(for: manager.documentRange)
                     if polarity != nil { applyContrastRendering(to: manager, range: manager.documentRange) }
                 } else if polarity != nil, let content = manager.textContentManager {
@@ -1400,19 +1421,28 @@ struct TextKit2EditorView: NSViewRepresentable {
                 return
             }
 
-            storage.beginEditing()
-            storage.setAttributes([
-                .font: baseFont,
-                .foregroundColor: palette.base,
-                .paragraphStyle: paragraph
-            ], range: fullRange)
-
+            var changes: [(NSRange, [NSAttributedString.Key: Any])] = []
+            func collectChanges(in range: NSRange, color: NSColor, font: NSFont) {
+                guard range.length > 0 else { return }
+                let desired: [NSAttributedString.Key: Any] = [
+                    .font: font, .foregroundColor: color, .paragraphStyle: paragraph
+                ]
+                storage.enumerateAttributes(in: range) { current, run, _ in
+                    if !NSDictionary(dictionary: current).isEqual(to: desired) {
+                        changes.append((run, desired))
+                    }
+                }
+            }
             let keywordFont = codeFont(weight: .semibold)
-            // A single lexical pass consumes strings and comments as complete tokens.
-            // Quotes inside comments and comment markers inside strings cannot leak.
+            var cursor = 0
+            // Re-evaluate lexical context across the file (including multiline
+            // comments), but leave unchanged runs alone. Replacing all attributes
+            // invalidates native layout for thousands of untouched paragraphs.
             codeSyntaxExpression()?.enumerateMatches(in: storage.string, range: fullRange) { match, _, _ in
                 guard let match else { return }
+                collectChanges(in: NSRange(location: cursor, length: match.range.location - cursor), color: palette.base, font: baseFont)
                 let color: NSColor
+                var font = baseFont
                 if match.range(withName: "comment").location != NSNotFound {
                     color = palette.comment
                 } else if match.range(withName: "string").location != NSNotFound {
@@ -1421,13 +1451,27 @@ struct TextKit2EditorView: NSViewRepresentable {
                     color = palette.number
                 } else {
                     color = palette.keyword
-                    storage.addAttribute(.font, value: keywordFont, range: match.range)
+                    font = keywordFont
                 }
-                storage.addAttribute(.foregroundColor, value: color, range: match.range)
+                collectChanges(in: match.range, color: color, font: font)
+                cursor = NSMaxRange(match.range)
             }
-
-            storage.endEditing()
-            applyEditorPresentation(to: textView)
+            collectChanges(in: NSRange(location: cursor, length: storage.length - cursor), color: palette.base, font: baseFont)
+            if !changes.isEmpty {
+                storage.beginEditing()
+                for (range, attributes) in changes { storage.setAttributes(attributes, range: range) }
+                storage.endEditing()
+            }
+            applyEditorPresentation(to: textView, refreshRendering: false)
+            if let manager = textView.textLayoutManager, let content = manager.textContentManager {
+                for (range, _) in changes {
+                    guard let start = content.location(content.documentRange.location, offsetBy: range.location),
+                          let end = content.location(start, offsetBy: range.length),
+                          let textRange = NSTextRange(location: start, end: end) else { continue }
+                    manager.invalidateRenderingAttributes(for: textRange)
+                    applyContrastRendering(to: manager, range: textRange)
+                }
+            }
         }
 
         private func codeFont(weight: NSFont.Weight) -> NSFont {

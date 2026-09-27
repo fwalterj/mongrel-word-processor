@@ -12,9 +12,12 @@
 		17715AB8D6743910E99E9631 /* WordProcessorContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13F4C79F47394355F17C647 /* WordProcessorContentView.swift */; };
 		17EFC87D9C2D6B85B5CF28A3 /* ManagedFontLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF5DD9012A3687781D6CD77 /* ManagedFontLibrary.swift */; };
 		18003229C045B59F29AD8970 /* ScreenplayFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E215E0B5B604D902785D281C /* ScreenplayFormattingTests.swift */; };
+		1E30CEFA0C1A4AC12D731525 /* WordDocumentCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C7A45DD1CD6E447B6632DC7 /* WordDocumentCodec.swift */; };
+		293DD7099D2115BB7C0427AC /* WordDocumentCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B35D98DAE9A63888D12556FF /* WordDocumentCodecTests.swift */; };
 		2EE3AAC3493454D915BD43BF /* ScreenplayPolishTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CF834C6F9A11D6849754EA /* ScreenplayPolishTests.swift */; };
 		3B032DB8D6BA26CFEF6B0ACC /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = ABDF8CA664842C64D2C1CAC7 /* AppIcon.icns */; };
 		3CE7A3CDA701FDAF89F330F6 /* README.txt in Resources */ = {isa = PBXBuildFile; fileRef = 9E3836C034D7460D9FDC5755 /* README.txt */; };
+		4F1731EDA7EC826FE471552F /* TextLineIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B487488EEFBA615C0759A4E /* TextLineIndexTests.swift */; };
 		50B5587AB71C4B3764EB8EDF /* DocumentSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D7FA82DE8AFE4EF5F4B9A7D /* DocumentSessionTests.swift */; };
 		53927129160362B183B958F5 /* ScreenplayDocumentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EC2E7C07D516A9C2391995F /* ScreenplayDocumentSettings.swift */; };
 		549C51CF3BA8A998E4C0D30C /* ScreenplayEditorIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FE5111C57E694E5AFD1F9AA /* ScreenplayEditorIntegrationTests.swift */; };
@@ -30,6 +33,8 @@
 		DB71453FB9C532269C16231D /* EditorScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44293302C7B4794F38038FFC /* EditorScrollView.swift */; };
 		E5AA739B25FCBD1741C0A4A9 /* DocumentPageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 680F8C98B5D7E097E022414A /* DocumentPageLayout.swift */; };
 		E858139410B8F8FE683FD783 /* CodeTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B279481BD525EE1D69AEF9 /* CodeTextEditing.swift */; };
+		F0CE1D0E7E6518AE8D75C991 /* TextLineIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9DDC30A90AEB751EC91363 /* TextLineIndex.swift */; };
+		F3172A4FFCD5832BBD47D1B1 /* WordFormatting.docx in Resources */ = {isa = PBXBuildFile; fileRef = 1E7941B533D8DFCE9D5CF696 /* WordFormatting.docx */; };
 		F41B7DA167516ECFD0F92E1F /* spellcheck_dictionary.txt in Resources */ = {isa = PBXBuildFile; fileRef = DCAB1A511A844BF112352251 /* spellcheck_dictionary.txt */; };
 		F502D8BCBB6E72F6C1FE4FEF /* MongrelDictionaryCompanionLexicon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */; };
 		F5F44B702721EE718AA6EE17 /* CodeTextEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 651AB30B5228FD32096E0FF3 /* CodeTextEditingTests.swift */; };
@@ -46,9 +51,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0C7A45DD1CD6E447B6632DC7 /* WordDocumentCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordDocumentCodec.swift; sourceTree = "<group>"; };
+		1E7941B533D8DFCE9D5CF696 /* WordFormatting.docx */ = {isa = PBXFileReference; path = WordFormatting.docx; sourceTree = "<group>"; };
 		1EC2E7C07D516A9C2391995F /* ScreenplayDocumentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenplayDocumentSettings.swift; sourceTree = "<group>"; };
 		3228FB88B36A352605F4B9FF /* LocalLanguageToolClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLanguageToolClient.swift; sourceTree = "<group>"; };
 		32C4B5AF281332A0760AA0F0 /* WorkspaceRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceRecoveryStore.swift; sourceTree = "<group>"; };
+		3B487488EEFBA615C0759A4E /* TextLineIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextLineIndexTests.swift; sourceTree = "<group>"; };
 		3B586887675402518D3AA9CC /* MongrelWordProcessor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MongrelWordProcessor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		44293302C7B4794F38038FFC /* EditorScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorScrollView.swift; sourceTree = "<group>"; };
 		48C1ABAEF2F2E9CFB5E505B3 /* MongrelWordProcessorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelWordProcessorApp.swift; sourceTree = "<group>"; };
@@ -56,6 +64,7 @@
 		651AB30B5228FD32096E0FF3 /* CodeTextEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextEditingTests.swift; sourceTree = "<group>"; };
 		680F8C98B5D7E097E022414A /* DocumentPageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPageLayout.swift; sourceTree = "<group>"; };
 		73F4D21005E34B993817D1ED /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		7E9DDC30A90AEB751EC91363 /* TextLineIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextLineIndex.swift; sourceTree = "<group>"; };
 		805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MongrelDictionaryCompanionLexicon.swift; sourceTree = "<group>"; };
 		87CF834C6F9A11D6849754EA /* ScreenplayPolishTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenplayPolishTests.swift; sourceTree = "<group>"; };
 		8D7FA82DE8AFE4EF5F4B9A7D /* DocumentSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSessionTests.swift; sourceTree = "<group>"; };
@@ -63,6 +72,7 @@
 		9FE5111C57E694E5AFD1F9AA /* ScreenplayEditorIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenplayEditorIntegrationTests.swift; sourceTree = "<group>"; };
 		A4B7890093DB9A8A0D29CE6F /* FormattingBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormattingBridge.swift; sourceTree = "<group>"; };
 		ABDF8CA664842C64D2C1CAC7 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		B35D98DAE9A63888D12556FF /* WordDocumentCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordDocumentCodecTests.swift; sourceTree = "<group>"; };
 		C13F4C79F47394355F17C647 /* WordProcessorContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordProcessorContentView.swift; sourceTree = "<group>"; };
 		C3B279481BD525EE1D69AEF9 /* CodeTextEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextEditing.swift; sourceTree = "<group>"; };
 		C7093040F437F963784527C3 /* PDFKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PDFKit.framework; path = System/Library/Frameworks/PDFKit.framework; sourceTree = SDKROOT; };
@@ -128,6 +138,8 @@
 				3228FB88B36A352605F4B9FF /* LocalLanguageToolClient.swift */,
 				CFF5DD9012A3687781D6CD77 /* ManagedFontLibrary.swift */,
 				805FE8384573D8CAC6CBE4B2 /* MongrelDictionaryCompanionLexicon.swift */,
+				7E9DDC30A90AEB751EC91363 /* TextLineIndex.swift */,
+				0C7A45DD1CD6E447B6632DC7 /* WordDocumentCodec.swift */,
 				32C4B5AF281332A0760AA0F0 /* WorkspaceRecoveryStore.swift */,
 			);
 			path = Services;
@@ -170,6 +182,14 @@
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
+		BD103B43FFAE5BBC20DDF53D /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				1E7941B533D8DFCE9D5CF696 /* WordFormatting.docx */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
 		CFDB2588A1036CBE3013F924 /* Models */ = {
 			isa = PBXGroup;
 			children = (
@@ -187,6 +207,9 @@
 				9FE5111C57E694E5AFD1F9AA /* ScreenplayEditorIntegrationTests.swift */,
 				E215E0B5B604D902785D281C /* ScreenplayFormattingTests.swift */,
 				87CF834C6F9A11D6849754EA /* ScreenplayPolishTests.swift */,
+				3B487488EEFBA615C0759A4E /* TextLineIndexTests.swift */,
+				B35D98DAE9A63888D12556FF /* WordDocumentCodecTests.swift */,
+				BD103B43FFAE5BBC20DDF53D /* Fixtures */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -252,6 +275,7 @@
 			buildConfigurationList = A463C3962386C7923DA9D6ED /* Build configuration list for PBXNativeTarget "MongrelWordProcessorTests" */;
 			buildPhases = (
 				2D493BCF153B6F5BC1A413A9 /* Sources */,
+				8624368C184F09BBD37A46DC /* Resources */,
 			);
 			buildRules = (
 			);
@@ -311,6 +335,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		8624368C184F09BBD37A46DC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F3172A4FFCD5832BBD47D1B1 /* WordFormatting.docx in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -323,6 +355,8 @@
 				549C51CF3BA8A998E4C0D30C /* ScreenplayEditorIntegrationTests.swift in Sources */,
 				18003229C045B59F29AD8970 /* ScreenplayFormattingTests.swift in Sources */,
 				2EE3AAC3493454D915BD43BF /* ScreenplayPolishTests.swift in Sources */,
+				4F1731EDA7EC826FE471552F /* TextLineIndexTests.swift in Sources */,
+				293DD7099D2115BB7C0427AC /* WordDocumentCodecTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -342,6 +376,8 @@
 				10A81EAD13E6BEB0CE558F8D /* MongrelWordProcessorApp.swift in Sources */,
 				53927129160362B183B958F5 /* ScreenplayDocumentSettings.swift in Sources */,
 				AAB5FB7939344DB67E085C67 /* TextKit2EditorView.swift in Sources */,
+				F0CE1D0E7E6518AE8D75C991 /* TextLineIndex.swift in Sources */,
+				1E30CEFA0C1A4AC12D731525 /* WordDocumentCodec.swift in Sources */,
 				17715AB8D6743910E99E9631 /* WordProcessorContentView.swift in Sources */,
 				72FC682A8B2070A23F09F447 /* WorkspaceRecoveryStore.swift in Sources */,
 			);
@@ -365,7 +401,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/MongrelWordProcessor.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = "";
@@ -497,7 +533,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/MongrelWordProcessor.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;

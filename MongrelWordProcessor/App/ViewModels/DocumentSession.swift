@@ -605,22 +605,23 @@ final class DocumentSession: ObservableObject {
         Int((editorZoom * 100).rounded())
     }
 
-    var codeLineCount: Int {
-        guard !attributedText.string.isEmpty else { return 1 }
-        return attributedText.string.reduce(into: 1) { count, character in
-            if character.isNewline { count += 1 }
+    private var cachedLineIndexText: NSAttributedString?
+    private var cachedLineIndex = TextLineIndex("")
+    private var codeLineIndex: TextLineIndex {
+        if cachedLineIndexText !== attributedText {
+            cachedLineIndex = TextLineIndex(attributedText.string)
+            cachedLineIndexText = attributedText
         }
+        return cachedLineIndex
     }
+
+    var codeLineCount: Int { codeLineIndex.count }
 
     var codeIndentationSummary: String {
         codeUseTabs ? "Tabs · \(codeTabWidth) columns" : "Spaces · \(codeTabWidth)"
     }
 
-    var codeLineEndingSummary: String {
-        if attributedText.string.contains("\r\n") { return "CRLF" }
-        if attributedText.string.contains("\r") { return "CR" }
-        return "LF"
-    }
+    var codeLineEndingSummary: String { codeLineIndex.lineEnding }
 
     var codeStorageSummary: String {
         if currentType == .mongrelDocument { return "MONGREL" }
@@ -1523,11 +1524,7 @@ final class DocumentSession: ObservableObject {
         }
 
         if url.pathExtension.lowercased() == "docx" {
-            let text = try NSAttributedString(
-                url: url,
-                options: [.documentType: NSAttributedString.DocumentType.officeOpenXML],
-                documentAttributes: nil
-            )
+            let text = try WordDocumentCodec.read(from: url)
             return (text, .wordDocument, .prose, nil, .empty, nil, .init())
         }
 
@@ -1646,10 +1643,9 @@ final class DocumentSession: ObservableObject {
                 let documentType: NSAttributedString.DocumentType = type == .wordDocument
                     ? .officeOpenXML
                     : .rtf
-                let data = try attributedText.data(
-                    from: range,
-                    documentAttributes: [.documentType: documentType]
-                )
+                let data = try type == .wordDocument
+                    ? WordDocumentCodec.data(from: attributedText)
+                    : attributedText.data(from: range, documentAttributes: [.documentType: documentType])
                 try data.write(to: url, options: .atomic)
             } else {
                 let text = attributedText.string
